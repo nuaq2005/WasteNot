@@ -1,37 +1,50 @@
-import React from "react";
+// client/src/pages/CheckFridge.jsx
+import React, { useEffect, useState } from "react";
+import { getFoods } from "../api";
 
-const items = [
-  { name: "Milk", quantity: 1, unit: "carton", daysLeft: 2 },
-  { name: "Chicken Breast", quantity: 2, unit: "pack", daysLeft: 3 },
-  { name: "Spinach", quantity: 1, unit: "bag", daysLeft: 5 },
-  { name: "Eggs", quantity: 10, unit: "pcs", daysLeft: 12 },
-  { name: "Yogurt", quantity: 4, unit: "cup", daysLeft: 10 },
-  { name: "Tomatoes", quantity: 6, unit: "pcs", daysLeft: 7 },
-];
+function daysLeft(dateStr) {
+  if (!dateStr) return null;
+  const [y, m, d] = dateStr.slice(0, 10).split("-").map(Number);
+  const target = new Date(y, m - 1, d);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.round((target - today) / 86400000);
+}
 
 export default function CheckFridge() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    getFoods()
+      .then((rows) =>
+        setItems(rows.map((r) => ({ ...r, daysLeft: daysLeft(r.expiration_date) })))
+      )
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
   const expireSoon = items
-    .filter((i) => i.daysLeft <= 5)
+    .filter((i) => i.daysLeft !== null && i.daysLeft <= 5)
     .sort((a, b) => a.daysLeft - b.daysLeft);
+
+  if (loading) return <p>Loading fridge...</p>;
+  if (error) return <p style={{ color: "crimson" }}>Error: {error}</p>;
 
   return (
     <div style={styles.page}>
       <h2>Check Fridge</h2>
-      <p>TigerData placeholder: expire soon + food quantity will appear here.</p>
-
-      <div style={styles.box}>
-        <p>View items that are expiring soon and manage your fridge inventory.</p>
-        <p><strong>Placeholder:</strong> TigerData will sync fridge data and track food quantity.</p>
-      </div>
 
       <div style={styles.card}>
         <h3 style={styles.cardTitle}>Expire Soon</h3>
         {expireSoon.length === 0 && <p>Nothing is expiring soon.</p>}
         {expireSoon.map((i) => (
-          <div key={i.name} style={styles.row}>
+          <div key={i.id} style={styles.row}>
             <span>{i.name}</span>
             <span style={{ ...styles.badge, background: i.daysLeft <= 3 ? "#ffd6d6" : "#fff0c2" }}>
-              {i.daysLeft} days left
+              {i.daysLeft < 0 ? "Expired" : `${i.daysLeft} days left`}
+              {i.expiration_is_estimated && " (est.)"}
             </span>
           </div>
         ))}
@@ -40,7 +53,7 @@ export default function CheckFridge() {
       <div style={styles.card}>
         <h3 style={styles.cardTitle}>Food Quantity</h3>
         {items.map((i) => (
-          <div key={i.name} style={styles.row}>
+          <div key={i.id} style={styles.row}>
             <span>{i.name}</span>
             <span>{i.quantity} {i.unit}</span>
           </div>

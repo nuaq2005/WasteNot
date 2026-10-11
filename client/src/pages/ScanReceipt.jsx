@@ -1,66 +1,93 @@
-import React from "react";
-
-const expiredItems = [
-  { name: "Milk", date: "2026-10-12", daysLeft: 2 },
-  { name: "Chicken Breast", date: "2026-10-13", daysLeft: 3 },
-  { name: "Spinach", date: "2026-10-15", daysLeft: 5 },
-  { name: "Yogurt", date: "2026-10-20", daysLeft: 10 },
-];
-
-const monthlyCost = {
-  total: 286.4,
-  categories: [
-    { name: "Produce", amount: 82.5 },
-    { name: "Meat & Seafood", amount: 96.9 },
-    { name: "Dairy & Eggs", amount: 48.0 },
-    { name: "Others", amount: 59.0 },
-  ],
-};
+// client/src/pages/ScanReceipt.jsx
+import React, { useState } from "react";
+import { scanReceipt, addFood } from "../api";
 
 export default function ScanReceipt() {
-  const max = Math.max(...monthlyCost.categories.map((c) => c.amount));
+  const [scanning, setScanning] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [items, setItems] = useState([]);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  async function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setError(""); setMessage(""); setScanning(true);
+    try {
+      const data = await scanReceipt(file);
+      setItems((data.items ?? []).map((i) => ({
+        ...i,
+        expiration_date: i.expiration_date ?? "",
+        expiration_is_estimated: Boolean(i.expiration_date),
+      })));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  function updateItem(index, field, value) {
+    setItems((prev) => prev.map((it, i) => (i === index ? { ...it, [field]: value, 
+      ...(field === "expiration_date" && { expiration_is_estimated: false }),
+    } : it)));
+  }
+
+  async function saveAll() {
+    setSaving(true); setError("");
+    try {
+      for (const item of items) {
+        await addFood({
+          name: item.name,
+          quantity: Number(item.quantity) || 1,
+          unit: item.unit,
+          expiration_date: item.expiration_date || null,
+          expiration_is_estimated: item.expiration_date ? item.expiration_is_estimated : false,
+        });
+      }
+      setMessage(`Saved ${items.length} items to your fridge.`);
+      setItems([]);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div style={styles.page}>
       <h2>Scan Your Receipt</h2>
-      <p>Gemini API placeholder: monthly cost + expire dates will appear here.</p>
 
       <div style={styles.box}>
-        <p>Upload or scan your grocery receipt to extract item names, prices, and expiry dates.</p>
-        <p><strong>Placeholder:</strong> Gemini API will process receipt images and return structured data.</p>
-        <input type="file" accept="image/*" style={{ marginTop: "10px" }} />
+        <p>Upload a photo of your grocery receipt (JPG, PNG, or WebP).</p>
+        <input type="file" accept="image/jpeg,image/png,image/webp"
+               onChange={handleFile} style={{ marginTop: "10px" }} />
+        {scanning && <p>Reading receipt with Gemini...</p>}
+        {error && <p style={{ color: "crimson" }}>{error}</p>}
+        {message && <p style={{ color: "green" }}>{message}</p>}
       </div>
 
-      <div style={styles.card}>
-        <h3 style={styles.cardTitle}>Expired Date</h3>
-        {expiredItems.map((item) => (
-          <div key={item.name} style={styles.row}>
-            <span>{item.name}</span>
-            <span>
-              {item.date}
-              <span style={{ ...styles.badge, background: item.daysLeft <= 3 ? "#ffd6d6" : "#d9f2e0" }}>
-                {item.daysLeft} days
-              </span>
-            </span>
-          </div>
-        ))}
-      </div>
+      {items.length > 0 && (
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>Review Items</h3>
+          {items.map((item, i) => (
+            <div key={i} style={{ ...styles.row, gap: "8px" }}>
+              <input value={item.name} onChange={(e) => updateItem(i, "name", e.target.value)} />
+              <input type="number" value={item.quantity} style={{ width: 60 }}
+                     onChange={(e) => updateItem(i, "quantity", e.target.value)} />
+              <input value={item.unit} style={{ width: 70 }}
+                     onChange={(e) => updateItem(i, "unit", e.target.value)} />
+              <input type="date" value={item.expiration_date}
+                     onChange={(e) => updateItem(i, "expiration_date", e.target.value)} />
+            </div>
+          ))}
+          <button onClick={saveAll} disabled={saving} style={{ marginTop: 12 }}>
+            {saving ? "Saving..." : "Save to Fridge"}
+          </button>
+        </div>
+      )}
 
-      <div style={styles.card}>
-        <h3 style={styles.cardTitle}>Monthly Cost</h3>
-        <p style={styles.total}>${monthlyCost.total.toFixed(2)}</p>
-        {monthlyCost.categories.map((c) => (
-          <div key={c.name} style={{ marginBottom: "10px" }}>
-            <div style={styles.row}>
-              <span>{c.name}</span>
-              <span>${c.amount.toFixed(2)}</span>
-            </div>
-            <div style={styles.barBg}>
-              <div style={{ ...styles.barFill, width: `${(c.amount / max) * 100}%` }} />
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* Monthly Cost card: keep as placeholder, see note below */}
     </div>
   );
 }

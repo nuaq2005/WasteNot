@@ -4,7 +4,8 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
-const { Pool } = require("pg");
+const { Pool, types } = require("pg");
+types.setTypeParser(1082, (v) => v); // DATE -> string
 
 const app = express();
 const pool = new Pool({
@@ -50,7 +51,7 @@ app.get("/api/foods", async (req, res) => {
 app.post("/api/foods", async (req, res) => {
   try {
     const {
-      name, quantity, unit, expiration_date,
+      name, quantity, unit, expiration_date, expiration_is_estimated,
       protein_g, carbs_g, fiber_g, sugar_g
     } = req.body;
 
@@ -58,17 +59,23 @@ app.post("/api/foods", async (req, res) => {
       return res.status(400).json({ error: "Food name is required" });
     }
 
+    
     const result = await pool.query(
       `INSERT INTO food_items
-       (name, quantity, unit, expiration_date,
+      (name, quantity, unit, expiration_date, expiration_is_estimated,
         protein_g, carbs_g, fiber_g, sugar_g)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       RETURNING *`,
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      RETURNING *`,
       [
-        name, quantity ?? 1, unit ?? "item",
+        name,
+        quantity ?? 1,
+        unit ?? "item",
         expiration_date || null,
-        protein_g ?? null, carbs_g ?? null,
-        fiber_g ?? null, sugar_g ?? null
+        expiration_is_estimated ?? true,
+        protein_g ?? null,
+        carbs_g ?? null,
+        fiber_g ?? null,
+        sugar_g ?? null
       ]
     );
 
@@ -104,7 +111,7 @@ app.post("/api/scan-receipt", upload.single("receipt"), async (req, res) => {
     const ai = new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY
     });
-
+ 
     const prompt = `
       Read this grocery receipt.
       Return ONLY valid JSON in this format:
@@ -113,20 +120,38 @@ app.post("/api/scan-receipt", upload.single("receipt"), async (req, res) => {
           {
             "name": "Spinach",
             "quantity": 1,
-            "unit": "bag"
+            "price": 2.99,
+            "unit": "bag",
+            expiration_date DATE,
+            "expiration_is_estimated": true,
+            "protein_g": 2.5,
+            "carbs_g": 3.0,
+            "fiber_g": 1.5,
+            "sugar_g": 1.0,
+            "created_at": "2023-10-01T12:00:00Z"
           }
         ]
       }
 
-      Include only identifiable grocery food items.
-      Exclude tax, discounts, totals, and non-food products.
-      Do not invent missing items or quantities.
-      If a product name is unclear, mark it as uncertain.
-      A receipt does not provide expiration dates or nutrition facts.
+      Instructions:
+        - Include only identifiable grocery food items.
+        - Exclude tax, discounts, totals, and non-food products.
+        - Do not invent missing items, quantities, or prices.
+        - Estimate an expiration date for each food item using
+          typical shelf life and the current date.
+        - Use YYYY-MM-DD format for expiration_date.
+        - Set expiration_date to a date in the future for estimated dates.
+        - Set expiration_is_estimated to true for every estimated date.
+        - Consider typical storage conditions and food type.
+        - If the item or its shelf life is too uncertain, use null
+          for expiration_date.
+        - Do not include nutrition facts unless they are provided
+          by a reliable source.
+        - Return valid JSON only.
     `;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.8-flash",
       contents: [
         {
           inlineData: {
@@ -154,6 +179,10 @@ app.post("/api/scan-receipt", upload.single("receipt"), async (req, res) => {
 });
 
 //Database initialization loaded
+
+app.use((err, req, res, next) => {
+  res.status(400).json({ error: err.message });
+});
 
 app.listen(process.env.PORT || 3001, () => {
   console.log("WasteNot API running on port 3001");
