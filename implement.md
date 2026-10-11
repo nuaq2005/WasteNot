@@ -7,20 +7,23 @@ is rendered by the existing **Health** tab in [client/src/App.jsx](./client/src/
 The section that previously contained the “Presage SDK + Snowflake placeholder”
 now contains two insight panels:
 
-1. **Top nutrition categories** — a clearly marked Snowflake-planned panel. It
-   explains that the app cannot yet calculate recipe-based protein,
-   carbohydrate, fat, or other nutrition totals because recipe history and
-   food-usage data are not implemented. It intentionally displays no invented
-   sample statistics.
-2. **Expiring foods** — a working panel that calls the existing `getFoods()`
-   client method, filters inventory for expired items and items expiring in the
-   next seven days, sorts them by expiration, and shows quantity and whether the
-   date was estimated. Loading, empty, and error states are included.
+1. **Top nutrition categories** — `GET /api/insights/weekly` reads usage totals
+   from Snowflake and shows Cortex nutrient estimates saved when a recipe is
+   marked made. Values are labeled as estimates.
+2. **Expiring foods** — the weekly endpoint filters current Tiger inventory in
+   SQL. If Snowflake is unavailable, the Health page falls back to
+   `GET /api/foods` so expiration visibility remains available.
+3. **Recipe storage and made history** — the API supports shared recipes,
+   ingredients, favorites, history, and marking a recipe made. Cortex estimates
+   protein, carbohydrates, fiber, and sugar; the server validates and snapshots
+   those values in PostgreSQL, then syncs them to Snowflake.
 
-The expiring-food panel uses PostgreSQL inventory through the existing
-`GET /api/foods` route. Snowflake, Presage, and recipe nutrition aggregation are
-**not connected yet**; the UI says so explicitly. There is no Snowflake or
-Presage SDK dependency or credential configured in the repository.
+The application code and Snowflake driver are present. Live Cortex and
+warehouse queries require the server-side Snowflake settings in
+`server/.env.example` and the warehouse table in `server/snowflake/schema.sql`.
+Until those are configured, the recipe-made endpoint cannot create nutrient
+estimates and weekly nutrition insights return an error; food expiry still
+works.
 
 ## Recommended data flow
 
@@ -45,28 +48,26 @@ make expiration visibility depend on a delayed warehouse sync.
 
 | File | Responsibility |
 |---|---|
-| [server/migrations/001_initial_schema.sql](./server/migrations/001_initial_schema.sql) | Create the current `food_items` table and recipe, recipe-ingredient, favorites, made-history, and nutrient-usage tables in Tiger. The nutrient usage table stores per-made-recipe gram snapshots so future edits do not rewrite history. |
-| `server/services/snowflake.js` (new) | Own Snowflake connection setup, parameterized aggregation queries, and error reporting. Keep credentials on the server, never in Vite/client variables. |
-| `server/index.js` | Add recipe/history routes and `GET /api/insights/weekly`. That route obtains nutrition aggregates from the Snowflake service and current expiring items from PostgreSQL, then returns one validated response. |
-| `client/src/api.js` | Add a typed-by-contract client function such as `getWeeklyInsights()` that calls `GET /api/insights/weekly`. |
-| `client/src/pages/Health.jsx` | Replace the current no-data message with the API result, while preserving loading, error, and empty states. The expiring-food panel is already wired to current PostgreSQL inventory here. |
-| `server/services/presage.js` (optional, new) | Encapsulate a Presage request if the product later needs an external waste-risk or usage prediction. Call it only from a server route/service, not from browser code. |
+| [server/migrations/001_initial_schema.sql](./server/migrations/001_initial_schema.sql) | Create inventory, recipe, ingredient, favorite, made-history, ingredient-usage, and nutrient-snapshot tables in Tiger. |
+| `server/scripts/migrate.js` | Apply the idempotent PostgreSQL migration with `npm run db:migrate`. |
+| `server/services/snowflake.js` | Own Snowflake connection setup, Cortex nutrient estimates, parameterized warehouse sync/aggregation, and error reporting. |
+| [server/snowflake/schema.sql](./server/snowflake/schema.sql) | Define the Snowflake nutrient-usage table that must be created in the configured database/schema. |
+| `server/index.js` | Provide recipe, favorite, made-history, and weekly-insights routes; retry unsynced nutrient snapshots. |
+| `client/src/api.js` | Provide `getWeeklyInsights()` for the weekly insights endpoint. |
+| `client/src/pages/Health.jsx` | Render estimated nutrition totals and expiring inventory with separate loading/error behavior and an expiry fallback. |
+| Presage integration | Optional and not implemented. Add only if the product later requires vendor-backed waste-risk predictions. |
 
 The server connects to Tiger (Tiger Data), which provides PostgreSQL-compatible
 database service. Use PostgreSQL SQL and the `pg` driver already present in the
 server. [server/migrations/001_initial_schema.sql](./server/migrations/001_initial_schema.sql)
-now defines `food_items` plus the recipe and nutrient-history tables used by
-the design. Apply this SQL to the configured Tiger database before starting the
-API. The repository does not yet include a migration runner, so apply it once
-through Tiger's SQL console or a PostgreSQL client connected with `DATABASE_URL`.
+defines `food_items` plus the recipe and nutrient-history tables used by the
+design. Apply it to the configured Tiger database with `cd server && npm run db:migrate`.
 Keep Tiger credentials and deployment-specific connection settings in the
 server environment.
 
-The migration's recipe tables establish storage only; recipe CRUD, marking a
-recipe as made, inventory decrement, and syncing snapshots to Snowflake still
-need implementation. There is no authentication yet, so the nullable
-`recipe_favorites.user_id` column is only a future extension point and does not
-provide household isolation or authorization.
+The recipe API uses one shared collection and adds no authentication. Marking a
+recipe made does not decrement inventory; no reliable matching/quantity
+conversion is defined between recipe ingredients and inventory rows.
 
 ## Suggested API response contract
 
@@ -97,7 +98,8 @@ For example, `GET /api/insights/weekly` could return:
       "expiration_date": "2026-10-13",
       "expiration_is_estimated": true
     }
-  ]
+  ],
+  "nutritionValuesAreEstimates": true
 }
 ```
 
@@ -105,133 +107,20 @@ Return empty arrays when there is no usage/inventory to report; return a clear
 server error if a required data source fails. Do not turn a Snowflake outage into
 a successful response with fabricated category values.
 
-## Example code placement
+## Implemented API behavior
 
-The following snippets describe the intended integration contract. The
-Snowflake service and weekly endpoint shown here are **not yet implemented**.
+- GET /api/recipes lists the shared recipe collection with ingredients.
+- POST /api/recipes saves a recipe and its ingredients.
+- GET /api/recipes/favorites and POST /api/recipes/:id/favorite list and toggle shared favorites.
+- GET /api/recipes/history lists made events, ingredient quantities used, and immutable nutrient snapshots.
+- POST /api/recipes/:id/made uses Snowflake AI_COMPLETE to estimate total recipe protein, carbohydrates, fiber, and sugar in grams; validates the structured result; stores the estimate and source in PostgreSQL; and syncs it to Snowflake. Cortex values are estimates, not measured nutrition facts.
+- GET /api/insights/weekly returns nutrition totals for the prior seven days plus today and SQL-filtered inventory rows for expired foods or foods expiring through seven days from today. Null expiration dates are omitted.
 
-### `server/services/snowflake.js` — aggregate recipe nutrient usage
+The Snowflake Node.js driver uses connection.execute() with bound query parameters. The configured role needs access to the selected Cortex model, warehouse, database, and schema, plus Snowflake's USE AI FUNCTIONS privilege and CORTEX_USER or AI_FUNCTIONS_USER database role. Configure the SNOWFLAKE_* values in the server environment and run server/snowflake/schema.sql in that database/schema before starting. Snowflake settings and permissions cannot be validated until supplied.
 
-After syncing recipe nutrient-usage snapshots to Snowflake, use Snowflake SQL to
-calculate totals. This assumes the warehouse table has `HOUSEHOLD_ID`,
-`EVENT_DATE`, `NUTRIENT_CATEGORY`, and `AMOUNT_GRAMS` columns. The PostgreSQL
-source table is `recipe_nutrient_usage`; the sync/model must add the household
-and made-event date keys needed by the warehouse query.
-The weekly period is the previous seven days plus today: `EVENT_DATE` is from
-seven days before the current date through the current date, inclusive. The
-response's `period.start` and `period.end` must be computed from the same
-calendar-date rule. `AMOUNT_GRAMS` is the summed mass in grams for a nutrient
-category actually used in one made recipe (for example, total protein grams
-across its ingredients and servings). It must be calculated when the meal is
-recorded and saved as a snapshot in `recipe_nutrient_usage`, not read later
-from mutable inventory data. Store one row per made recipe and nutrient
-category; `source` identifies the nutrient-data provenance (such as a trusted
-food-data provider or user entry). Do not infer these totals from an item's
-inventory quantity. Current item fields include protein, carbs, fiber, and
-sugar only; there is no fat field, and receipt review does not save those
-nutrient values today. Add fat only when its source and validation are defined.
+The made endpoint records each recipe ingredient as a food-usage event, scaling its saved quantity by the requested servings. It does not decrement inventory because ingredient-to-inventory matching and unit conversion are not defined.
 
-```js
-// server/services/snowflake.js
-// Keep Snowflake credentials and queries on the server; do not expose them to Vite.
-async function getTopRecipeNutritionCategories(connection, householdId) {
-  // Bind the household and date window instead of interpolating user input.
-  const sql = `
-    SELECT
-      NUTRIENT_CATEGORY AS category,
-      SUM(AMOUNT_GRAMS) AS amount_grams
-    FROM RECIPE_NUTRIENT_USAGE
-    WHERE HOUSEHOLD_ID = ?
-      AND EVENT_DATE >= DATEADD(day, -7, CURRENT_DATE())
-      AND EVENT_DATE < DATEADD(day, 1, CURRENT_DATE())
-    GROUP BY NUTRIENT_CATEGORY
-    ORDER BY amount_grams DESC
-    LIMIT 4
-  `;
-
-  return executeSnowflakeQuery(connection, sql, [householdId]);
-}
-
-module.exports = { getTopRecipeNutritionCategories };
-```
-
-`executeSnowflakeQuery` above represents the query wrapper to implement using
-the selected Snowflake Node.js driver; it does not exist in this repository.
-Use the driver's documented connection and parameter-binding API.
-
-### `server/index.js` — combine analytics with live expiry data
-
-```js
-// server/index.js
-// This route is a design example; it depends on the future Snowflake service,
-// recipe/usage schema, and household identity/authentication.
-app.get("/api/insights/weekly", async (req, res) => {
-  try {
-    const householdId = req.auth.householdId;
-
-    // Nutrition is aggregated from recipe usage in Snowflake.
-    const topNutritionCategories =
-      await snowflakeService.getTopRecipeNutritionCategories(
-        snowflakeConnection,
-        householdId
-      );
-
-    // Filter in SQL so the API returns only expired and soon-to-expire rows.
-    // The window is inclusive of today through seven days from today; null
-    // expiration dates are omitted. The migration defines this Tiger schema.
-    const expiringFoodsResult = await pool.query(
-      `SELECT id, name, quantity, unit, expiration_date, expiration_is_estimated
-       FROM food_items
-       WHERE expiration_date IS NOT NULL
-         AND expiration_date <= CURRENT_DATE + INTERVAL '7 days'
-       ORDER BY expiration_date ASC NULLS LAST`
-    );
-
-    // Keep the response period aligned with the Snowflake filter.
-    const periodResult = await pool.query(
-      `SELECT (CURRENT_DATE - 7)::text AS start,
-              CURRENT_DATE::text AS end`
-    );
-
-    res.json({
-      period: periodResult.rows[0],
-      topNutritionCategories,
-      expiringFoods: expiringFoodsResult.rows,
-    });
-  } catch (error) {
-    console.error("Weekly insights failed:", error);
-    res.status(500).json({ error: "Could not load weekly insights" });
-  }
-});
-```
-
-The current server has no `req.auth`, household identity, Snowflake connection,
-or recipe/usage schema. Those prerequisites must be implemented before this
-example can run. In particular, the current app has no login system, so
-household-scoped queries need an explicit identity design rather than a
-hard-coded household ID.
-
-### `client/src/api.js` and `client/src/pages/Health.jsx` — display live values
-
-```js
-// client/src/api.js
-// Add this alongside getFoods() after the server route is implemented.
-export const getWeeklyInsights = () => request("/api/insights/weekly");
-```
-
-```jsx
-// client/src/pages/Health.jsx
-// Fetch the combined response and render real ranked amounts; keep the existing
-// loading/error handling so an upstream failure is visible to the user.
-const insights = await getWeeklyInsights();
-setTopNutritionCategories(insights.topNutritionCategories);
-setExpiringFoods(insights.expiringFoods);
-```
-
-The current Health screen already fetches foods using `getFoods()` and renders
-expiry details. When the combined endpoint is ready, switch that screen to its
-response or retain `getFoods()` as the expiry-only source. Do not show static
-values as if they were live nutrition analytics.
+If the warehouse is temporarily unavailable, a made event and nutrient snapshot remain in Tiger with a pending sync marker. The next weekly insights request retries the sync. The Health screen falls back to the inventory API so expiration visibility does not depend on Snowflake availability.
 
 ## Where Presage should be used
 
@@ -272,7 +161,7 @@ verified results or recommend recipes from them. Validate structured Gemini
 output server-side and keep user review before any generated recipe changes
 inventory.
 
-Gemini recipe generation is not implemented today: it is only used for receipt
-parsing. Recipe history, nutrient usage data, and recipe recommendation routes
-must be added before Gemini can make grounded, household-specific suggestions.
+Gemini recipe recommendation generation is not implemented; Gemini remains
+used for receipt parsing. Cortex is used here only to estimate nutrient
+snapshots for recipes marked as made.
 

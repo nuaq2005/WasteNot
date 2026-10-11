@@ -11,6 +11,7 @@ async function request(path, options) {
 }
 
 export const getFoods = () => request("/api/foods");
+export const getWeeklyInsights = () => request("/api/insights/weekly");
 
 export const addFood = (food) =>
   request("/api/foods", {

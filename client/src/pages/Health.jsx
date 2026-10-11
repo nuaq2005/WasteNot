@@ -1,17 +1,11 @@
 import { useEffect, useState } from "react";
-import { getFoods } from "../api";
+import { getFoods, getWeeklyInsights } from "../api";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const EXPIRING_WINDOW_DAYS = 7;
 
 function daysUntil(dateString) {
-  if (!dateString) return null;
-
   const [year, month, day] = dateString.slice(0, 10).split("-").map(Number);
   const expiryDate = new Date(year, month - 1, day);
-
-  if (Number.isNaN(expiryDate.getTime())) return null;
-
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   return Math.round((expiryDate - today) / DAY_MS);
@@ -26,28 +20,42 @@ function expirationLabel(days) {
 
 export default function Health() {
   const [expiringFoods, setExpiringFoods] = useState([]);
+  const [topNutritionCategories, setTopNutritionCategories] = useState([]);
+  const [period, setPeriod] = useState(null);
+  const [loadingNutrition, setLoadingNutrition] = useState(true);
   const [loadingFoods, setLoadingFoods] = useState(true);
+  const [nutritionError, setNutritionError] = useState("");
   const [foodsError, setFoodsError] = useState("");
 
   useEffect(() => {
-    getFoods()
-      .then((foods) => {
-        const expiring = foods
-          .map((food) => ({
-            ...food,
-            daysUntilExpiry: daysUntil(food.expiration_date),
-          }))
-          .filter(
-            (food) =>
-              food.daysUntilExpiry !== null &&
-              food.daysUntilExpiry <= EXPIRING_WINDOW_DAYS
-          )
-          .sort((a, b) => a.daysUntilExpiry - b.daysUntilExpiry);
-
-        setExpiringFoods(expiring);
+    getWeeklyInsights()
+      .then((insights) => {
+        setExpiringFoods(insights.expiringFoods);
+        setTopNutritionCategories(insights.topNutritionCategories);
+        setPeriod(insights.period);
       })
-      .catch((error) => setFoodsError(error.message))
-      .finally(() => setLoadingFoods(false));
+      .catch((requestError) => {
+        setNutritionError(requestError.message);
+        // Expiration visibility remains available if Snowflake is unavailable.
+        return getFoods().then((foods) => {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          setExpiringFoods(
+            foods
+              .map((food) => {
+                if (!food.expiration_date) return { ...food, expiryDay: null };
+                const [year, month, day] = food.expiration_date.slice(0, 10).split("-").map(Number);
+                return { ...food, expiryDay: new Date(year, month - 1, day) };
+              })
+              .filter((food) => food.expiryDay && (food.expiryDay - today) / DAY_MS <= 7)
+              .sort((a, b) => a.expiryDay - b.expiryDay)
+          );
+        }).catch((foodsRequestError) => setFoodsError(foodsRequestError.message));
+      })
+      .finally(() => {
+        setLoadingNutrition(false);
+        setLoadingFoods(false);
+      });
   }, []);
 
   return (
@@ -57,31 +65,44 @@ export default function Health() {
           <p style={styles.eyebrow}>WEEKLY OVERVIEW</p>
           <h2>Food insights</h2>
           <p style={styles.description}>
-            See what needs using soon and, once recipe tracking is connected,
-            which nutrition categories your household uses most.
+            See foods that need using soon and estimated nutrition totals from
+            recipes marked as made.
           </p>
         </div>
-        <span style={styles.connectionBadge}>Snowflake not connected</span>
+        {period && (
+          <span style={styles.connectionBadge}>
+            {period.start} – {period.end}
+          </span>
+        )}
       </header>
 
       <section aria-labelledby="recipe-nutrition-title" style={styles.card}>
         <div style={styles.cardHeader}>
           <div>
-            <p style={styles.eyebrow}>RECIPE USAGE · LAST 7 DAYS</p>
+            <p style={styles.eyebrow}>RECIPE USAGE · TODAY + PRIOR 7 DAYS</p>
             <h3 id="recipe-nutrition-title" style={styles.cardTitle}>
               Top nutrition categories
             </h3>
           </div>
-          <span style={styles.sourceBadge}>Planned: Snowflake</span>
+          <span style={styles.sourceBadge}>AI estimates · Snowflake Cortex</span>
         </div>
-        <div style={styles.emptyState}>
-          <strong>Recipe nutrition insights are not available yet.</strong>
-          <p>
-            This panel will rank protein, carbohydrates, fat, and other
-            nutrition categories using recipes marked as made. Recipe history
-            and nutrition usage data are not stored by the current app yet.
-          </p>
-        </div>
+        {loadingNutrition && <p style={styles.status}>Loading nutrition insights…</p>}
+        {!loadingNutrition && nutritionError && (
+          <p role="alert" style={styles.error}>Nutrition insights unavailable: {nutritionError}</p>
+        )}
+        {!loadingNutrition && !nutritionError && topNutritionCategories.length === 0 && (
+          <p style={styles.status}>No made recipes have nutrition estimates in this period.</p>
+        )}
+        {!loadingNutrition && !nutritionError && topNutritionCategories.length > 0 && (
+          <ul style={styles.foodList}>
+            {topNutritionCategories.map((item) => (
+              <li key={item.category} style={styles.foodRow}>
+                <strong>{item.category}</strong>
+                <span style={styles.quantity}>{item.amountGrams.toLocaleString()} g · estimated</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section aria-labelledby="expiring-foods-title" style={styles.card}>
@@ -92,7 +113,7 @@ export default function Health() {
               Expiring foods
             </h3>
           </div>
-          <span style={styles.sourceBadge}>Next 7 days</span>
+          <span style={styles.sourceBadge}>Expired + 7 days</span>
         </div>
 
         {loadingFoods && <p style={styles.status}>Loading inventory…</p>}
@@ -122,10 +143,10 @@ export default function Health() {
                 <span
                   style={{
                     ...styles.expiration,
-                    ...(food.daysUntilExpiry < 0 ? styles.expired : {}),
+                    ...(daysUntil(food.expiration_date) < 0 ? styles.expired : {}),
                   }}
                 >
-                  {expirationLabel(food.daysUntilExpiry)}
+                  {expirationLabel(daysUntil(food.expiration_date))}
                   {food.expiration_is_estimated ? " · estimated" : ""}
                 </span>
               </li>
