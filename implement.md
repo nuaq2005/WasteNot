@@ -45,16 +45,28 @@ make expiration visibility depend on a delayed warehouse sync.
 
 | File | Responsibility |
 |---|---|
-| `server` database migrations (new) | Add recipe, recipe-ingredient, recipe-history, and food-usage tables. Persist the nutrient amounts used by each recipe as a snapshot so future food-data changes do not rewrite history. |
+| [server/migrations/001_initial_schema.sql](./server/migrations/001_initial_schema.sql) | Create the current `food_items` table and recipe, recipe-ingredient, favorites, made-history, and nutrient-usage tables in Tiger. The nutrient usage table stores per-made-recipe gram snapshots so future edits do not rewrite history. |
 | `server/services/snowflake.js` (new) | Own Snowflake connection setup, parameterized aggregation queries, and error reporting. Keep credentials on the server, never in Vite/client variables. |
 | `server/index.js` | Add recipe/history routes and `GET /api/insights/weekly`. That route obtains nutrition aggregates from the Snowflake service and current expiring items from PostgreSQL, then returns one validated response. |
 | `client/src/api.js` | Add a typed-by-contract client function such as `getWeeklyInsights()` that calls `GET /api/insights/weekly`. |
 | `client/src/pages/Health.jsx` | Replace the current no-data message with the API result, while preserving loading, error, and empty states. The expiring-food panel is already wired to current PostgreSQL inventory here. |
 | `server/services/presage.js` (optional, new) | Encapsulate a Presage request if the product later needs an external waste-risk or usage prediction. Call it only from a server route/service, not from browser code. |
 
-The migration location and SQL dialect should follow whichever migration tool
-the project adopts; there is no migration framework or schema directory in the
-repository today.
+The server connects to Tiger (Tiger Data), which provides PostgreSQL-compatible
+database service. Use PostgreSQL SQL and the `pg` driver already present in the
+server. [server/migrations/001_initial_schema.sql](./server/migrations/001_initial_schema.sql)
+now defines `food_items` plus the recipe and nutrient-history tables used by
+the design. Apply this SQL to the configured Tiger database before starting the
+API. The repository does not yet include a migration runner, so apply it once
+through Tiger's SQL console or a PostgreSQL client connected with `DATABASE_URL`.
+Keep Tiger credentials and deployment-specific connection settings in the
+server environment.
+
+The migration's recipe tables establish storage only; recipe CRUD, marking a
+recipe as made, inventory decrement, and syncing snapshots to Snowflake still
+need implementation. There is no authentication yet, so the nullable
+`recipe_favorites.user_id` column is only a future extension point and does not
+provide household isolation or authorization.
 
 ## Suggested API response contract
 
@@ -100,9 +112,24 @@ Snowflake service and weekly endpoint shown here are **not yet implemented**.
 
 ### `server/services/snowflake.js` — aggregate recipe nutrient usage
 
-After adding and syncing a `RECIPE_NUTRIENT_USAGE` table, use Snowflake SQL to
-calculate exact totals. This assumes the warehouse table has
-`HOUSEHOLD_ID`, `EVENT_DATE`, `NUTRIENT_CATEGORY`, and `AMOUNT_GRAMS` columns.
+After syncing recipe nutrient-usage snapshots to Snowflake, use Snowflake SQL to
+calculate totals. This assumes the warehouse table has `HOUSEHOLD_ID`,
+`EVENT_DATE`, `NUTRIENT_CATEGORY`, and `AMOUNT_GRAMS` columns. The PostgreSQL
+source table is `recipe_nutrient_usage`; the sync/model must add the household
+and made-event date keys needed by the warehouse query.
+The weekly period is the previous seven days plus today: `EVENT_DATE` is from
+seven days before the current date through the current date, inclusive. The
+response's `period.start` and `period.end` must be computed from the same
+calendar-date rule. `AMOUNT_GRAMS` is the summed mass in grams for a nutrient
+category actually used in one made recipe (for example, total protein grams
+across its ingredients and servings). It must be calculated when the meal is
+recorded and saved as a snapshot in `recipe_nutrient_usage`, not read later
+from mutable inventory data. Store one row per made recipe and nutrient
+category; `source` identifies the nutrient-data provenance (such as a trusted
+food-data provider or user entry). Do not infer these totals from an item's
+inventory quantity. Current item fields include protein, carbs, fiber, and
+sugar only; there is no fat field, and receipt review does not save those
+nutrient values today. Add fat only when its source and validation are defined.
 
 ```js
 // server/services/snowflake.js
@@ -149,17 +176,27 @@ app.get("/api/insights/weekly", async (req, res) => {
         householdId
       );
 
-    // Current expiry dates come from the operational PostgreSQL inventory.
-    const expiringFoods = await pool.query(
+    // Filter in SQL so the API returns only expired and soon-to-expire rows.
+    // The window is inclusive of today through seven days from today; null
+    // expiration dates are omitted. The migration defines this Tiger schema.
+    const expiringFoodsResult = await pool.query(
       `SELECT id, name, quantity, unit, expiration_date, expiration_is_estimated
        FROM food_items
-       WHERE expiration_date <= CURRENT_DATE + INTERVAL '7 days'
+       WHERE expiration_date IS NOT NULL
+         AND expiration_date <= CURRENT_DATE + INTERVAL '7 days'
        ORDER BY expiration_date ASC NULLS LAST`
     );
 
+    // Keep the response period aligned with the Snowflake filter.
+    const periodResult = await pool.query(
+      `SELECT (CURRENT_DATE - 7)::text AS start,
+              CURRENT_DATE::text AS end`
+    );
+
     res.json({
+      period: periodResult.rows[0],
       topNutritionCategories,
-      expiringFoods: expiringFoods.rows,
+      expiringFoods: expiringFoodsResult.rows,
     });
   } catch (error) {
     console.error("Weekly insights failed:", error);
