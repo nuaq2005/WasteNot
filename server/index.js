@@ -451,3 +451,10 @@ server.on("upgrade", (request, socket, head) => {
 
 // Export the server for use in other modules.
 module.exports = server;
+
+if (require.main === module) {
+  const port = Number(process.env.PORT) || 3001;
+  server.listen(port, () => {
+    console.log(`WasteNot API running on port ${port}`);
+  });
+}
