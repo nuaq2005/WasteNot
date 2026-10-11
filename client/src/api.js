@@ -1,13 +1,28 @@
 // client/src/api.js
-const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
-async function request(path, options) {
-  const res = await fetch(`${BASE}${path}`, options);
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `Request failed (${res.status})`);
+// API functions for interacting with the WasteNot backend changed for vercel
+// client/src/api.js
+const BASE = "";
+
+export async function request(path, options = {}) {
+  const isJsonString = typeof options.body === "string";
+
+  const response = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers: {
+      ...(isJsonString ? { "Content-Type": "application/json" } : {}),
+      ...options.headers,
+    },
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text;
+    try { message = JSON.parse(text).error || text; } catch {}
+    throw new Error(message || `API request failed: ${response.status}`);
   }
-  return res.json();
+
+  return response.json();
 }
 
 export const getFoods = () => request("/api/foods");
@@ -17,7 +32,7 @@ export const getRecipeRecommendations = () =>
 export const createVitalsSession = () =>
   request("/api/vitals/sessions", { method: "POST" });
 export const stopVitalsSession = (token) =>
-  fetch(`${BASE}/api/vitals/sessions/${encodeURIComponent(token)}`, { method: "DELETE" });
+  request(`/api/vitals/sessions/${encodeURIComponent(token)}`, { method: "DELETE" });
 
 export function getVitalsWebSocketUrl(token) {
   const url = new URL(BASE);
