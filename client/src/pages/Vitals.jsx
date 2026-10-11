@@ -3,6 +3,7 @@ import { createVitalsSession, getVitalsWebSocketUrl, stopVitalsSession } from ".
 
 // 40 ms yields 25 sampled camera frames per second.
 const FRAME_INTERVAL_MS = 40;
+const SDK_STATUS_LABELS = ["Uninitialized", "Idle", "Starting", "Running", "Stopping", "Error"];
 
 function metricText(metric, suffix = "") {
   if (!metric) return "Waiting for signal";
@@ -34,6 +35,7 @@ export default function Vitals() {
   const [validation, setValidation] = useState("Start a session and keep your face centered in even light.");
   const [metrics, setMetrics] = useState({ pulseRate: null, breathingRate: null, hrv: null });
   const [sdkFrameRate, setSdkFrameRate] = useState(null);
+  const [sdkProcessingStatus, setSdkProcessingStatus] = useState(null);
   const [error, setError] = useState("");
 
   function releaseResources() {
@@ -82,6 +84,7 @@ export default function Vitals() {
     setError("");
     setMetrics({ pulseRate: null, breathingRate: null, hrv: null });
     setSdkFrameRate(null);
+    setSdkProcessingStatus(null);
     setElapsedSeconds(0);
     setValidation("Center your face in the frame and stay still.");
     setStatus("Requesting camera access…");
@@ -155,6 +158,8 @@ export default function Vitals() {
           setMetrics(payload.metrics);
         } else if (payload.type === "frameRate") {
           setSdkFrameRate(payload.framesPerSecond);
+        } else if (payload.type === "processingStatus") {
+          setSdkProcessingStatus(payload.status);
         } else if (payload.type === "error") {
           setError(payload.error || "SmartSpectra could not process this session.");
           stopMeasurement("Measurement stopped after a service error.");
@@ -228,6 +233,7 @@ export default function Vitals() {
     error: { marginTop: 12, color: "crimson" },
     statusPill: { display: "inline-block", padding: "4px 9px", borderRadius: 99, background: "#f1eef6", color: "#51495e", fontSize: 13 },
   };
+  const hasAnyMetric = Object.values(metrics).some((metric) => metric && Number.isFinite(Number(metric.value)));
 
   return (
     <div style={styles.page}>
@@ -252,6 +258,16 @@ export default function Vitals() {
             <p style={sdkFrameRate < 25 ? styles.error : styles.status} aria-live="polite">
               Frames reaching SmartSpectra: {sdkFrameRate} FPS
               {sdkFrameRate < 25 ? " · add bright, even light and close other camera or CPU-heavy apps" : ""}
+            </p>
+          )}
+          {measuring && sdkProcessingStatus != null && (
+            <p style={styles.status} aria-live="polite">
+              SmartSpectra pipeline: {SDK_STATUS_LABELS[sdkProcessingStatus] ?? `status ${sdkProcessingStatus}`}
+            </p>
+          )}
+          {measuring && elapsedSeconds >= 60 && !hasAnyMetric && (
+            <p role="alert" style={styles.error}>
+              No readings yet after 60 seconds. Confirm the SDK input is at least 25 FPS, use bright even light, keep one face centered and still, and check the server terminal for a SmartSpectra SDK error.
             </p>
           )}
           {measuring ? (
