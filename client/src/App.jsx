@@ -3,12 +3,14 @@ import { useState } from 'react'
 import CheckFridge from './pages/CheckFridge.jsx'
 import ScanReceipt from './pages/ScanReceipt.jsx'
 import Health from './pages/Health.jsx'
+import Vitals from './pages/Vitals.jsx'
 import './App.css'
 
 const tabs = [
   { id: 'fridge', label: 'Check Fridge', Component: CheckFridge },
   { id: 'receipt', label: 'Scan Receipt', Component: ScanReceipt },
   { id: 'health', label: 'Health', Component: Health },
+  { id: 'vitals', label: 'Vitals', Component: Vitals },
 ]
 
 function App() {

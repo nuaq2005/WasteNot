@@ -1,5 +1,5 @@
 // client/src/pages/ScanReceipt.jsx
-import React, { useState } from "react";
+import { useState } from "react";
 import { scanReceipt, addFood } from "../api";
 
 export default function ScanReceipt() {
@@ -17,6 +17,7 @@ export default function ScanReceipt() {
       const data = await scanReceipt(file);
       setItems((data.items ?? []).map((i) => ({
         ...i,
+        price: i.price == null ? "" : String(i.price),
         expiration_date: i.expiration_date ?? "",
         expiration_is_estimated: Boolean(i.expiration_date),
       })));
@@ -43,6 +44,7 @@ export default function ScanReceipt() {
           unit: item.unit,
           expiration_date: item.expiration_date || null,
           expiration_is_estimated: item.expiration_date ? item.expiration_is_estimated : false,
+          receipt_line_total: item.price === "" ? null : Number(item.price),
         });
       }
       setMessage(`Saved ${items.length} items to your fridge.`);
@@ -79,6 +81,11 @@ export default function ScanReceipt() {
                      onChange={(e) => updateItem(i, "unit", e.target.value)} />
               <input type="date" value={item.expiration_date}
                      onChange={(e) => updateItem(i, "expiration_date", e.target.value)} />
+              <label style={styles.priceField}>
+                Receipt line total ($)
+                <input type="number" min="0" step="0.01" value={item.price}
+                       onChange={(e) => updateItem(i, "price", e.target.value)} />
+              </label>
             </div>
           ))}
           <button onClick={saveAll} disabled={saving} style={{ marginTop: 12 }}>
@@ -110,6 +117,7 @@ const styles = {
   },
   cardTitle: { margin: "0 0 12px" },
   row: { display: "flex", justifyContent: "space-between", padding: "6px 0" },
+  priceField: { display: "grid", gap: "3px", fontSize: "12px", color: "#555" },
   badge: { marginLeft: "10px", padding: "2px 8px", borderRadius: "10px", fontSize: "13px" },
   total: { fontSize: "32px", fontWeight: "bold", margin: "0 0 12px" },
   barBg: { background: "#eef2f7", borderRadius: "6px", height: "8px" },
