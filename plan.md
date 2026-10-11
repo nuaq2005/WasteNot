@@ -94,7 +94,7 @@ A full user journey could look like this:
 
 1. User opens the WasteNot dashboard
    - The app loads the current inventory from `GET /api/foods`
-   - The backend can also request a summary from Snowflake Cortex, such as: top expiring items, category trends, or household waste patterns
+   - The dashboard shows the user’s active pantry and a weekly summary of expiring items and top consumed food categories like Protein or Carbs
 
 2. User scans a grocery receipt
    - The user uploads an image to the receipt scanning form
@@ -103,35 +103,35 @@ A full user journey could look like this:
 
 3. The backend normalizes the scanned items
    - It maps raw receipt names into the `food_items` schema
-   - It assigns default quantities, units, and null expiration dates if they are not provided
+   - It assigns a default quantity of 1 serving, a default unit such as `item` or `serving`, and null expiration dates if they are not provided
    - It stores the inventory updates in PostgreSQL
 
-4. The app triggers enrichment
-   - After saving, the backend sends the current inventory and recent activity to Snowflake Cortex
-   - Snowflake analyzes trends such as food categories, expiration risk, over-buying, and consumption patterns
-   - The app also sends inventory context to the Presage API for predictive scoring
+4. The user reviews receipt results
+   - The user can accept, reject, or edit the receipt-imported items before saving them
+   - This keeps the AI extraction as a suggestion layer rather than a final source of truth
 
-5. Presage generates recommendations
-   - It may rank items by urgency, “likely to spoil soon,” or “best to consume first”
-   - It can also suggest meal ideas or recommendations based on what is in the pantry
+5. The app prepares recipe recommendations
+   - The backend collects the current inventory, top expiring items, and the most consumed food categories for the past week
+   - The app sends that information to Gemini along with the user’s saved preferences and recipe history
+   - Gemini recommends recipes that best match what is currently available and what the household tends to eat most often
 
-6. The frontend renders the smart insights
-   - Inventory list shows upcoming expiration dates
-   - A recommendations section suggests what to use first
-   - A forecast panel may show waste-risk trends for the week
-   - A Snowflake analytics panel may show overall food usage or buying patterns
+6. The user interacts with recipe flows
+   - Recommended recipes appear in the second tab
+   - The user can save favorite recipes in the third tab
+   - The user can mark a recipe as made and keep a history of what was cooked
 
-7. User reviews and confirms actions
-   - The user can accept, reject, or edit the receipt-imported items
-   - They can mark food as eaten, donated, or discarded
-   - Those updates feed back into the data pipeline so Predictions and Cortex analytics stay current
+7. The app tracks weekly insights
+   - It highlights top expiring items for the week
+   - It highlights the most consumed food categories, such as protein, carbs, produce, dairy, and grains
+   - These insights are derived from recipe history and food usage data, not from a separate Snowflake or Presage workflow
 
 This flow gives the app a clear pattern:
 
-- local app + database for immediate actions
-- Gemini for receipt extraction
-- Snowflake Cortex for warehouse-style analytics
-- Presage for predictive prioritization and AI guidance
+- receipt scan for the first tab
+- Gemini-based recipe recommendations for the second tab
+- stored recipes and favorites for the third tab
+- weekly food insights for the fourth tab
+- no separate prescriptive AI scoring layer required for the core product
 
 ## 2.3 Recipe intelligence, “made” tracking, and user favorites
 
@@ -146,14 +146,15 @@ At the moment, the codebase has:
 - no “made” or consumption history table
 - no frontend tab for recommended recipes or saved recipe collections
 
-The intended product direction is more specific than generic “top expiring items” metrics. A stronger version of the app would do this:
+The intended product direction is to focus on the user-facing intelligence that matters most:
 
-- show the top expiring items in the inventory dashboard
-- show the categories of the most consumed foods
-- derive those categories from recipes the user actually made
-- allow the user to mark a recipe as “made” in the UI
-- save recipe favorites that the user explicitly likes
-- persist both recipe suggestions and user-made recipe history for future recommendations
+- top expiring items for the week
+- most consumed food categories for the week, such as protein, carbs, produce, dairy, and grains
+- recipe recommendations generated from current inventory and household cooking patterns
+- a saved recipe library and favorites list
+- a record of recipes the user made so the system can improve future suggestions
+
+This should be based on actual recipe usage, not a broad warehouse analytics feature. The key idea is: if the household makes a recipe with spinach, eggs, and rice regularly, the app can identify those as commonly consumed items and use that history to rank recommendations.
 
 ### Recommended data model
 
@@ -168,7 +169,6 @@ Suggested tables:
   - `description`
   - `instructions`
   - `source` (`ai_generated`, `user_created`, `imported`)
-  - `is_favorite` or a separate favorites table
   - `created_at`
   - `updated_at`
 
@@ -196,7 +196,7 @@ Suggested tables:
   - `notes`
   - `status` (`planned`, `made`, `skipped`)
 
-- `food_usage_events` (optional but useful)
+- `food_usage_events`
   - `id`
   - `user_id`
   - `food_name`
@@ -205,6 +205,101 @@ Suggested tables:
   - `unit`
   - `source` (`recipe`, `manual`, `receipt`)
   - `event_date`
+
+### Recipe recommendation UX
+
+The frontend should have a recipe tab structure like:
+
+- Recommended
+- My recipes
+- Favorites
+- Made
+
+Behavior:
+
+- Recommended tab: Gemini suggests recipes based on current inventory, expiry risk, and recent household cooking patterns
+- My recipes tab: recipes created by the user and saved locally
+- Favorites tab: user-saved recipes sorted by favorites
+- Made tab: history of recipes the user has already cooked, including timestamps and a summary of which ingredients were used
+
+### End-to-end recipe flow
+
+1. User opens the Recipes tab
+2. The app loads recipe recommendations from Gemini using current inventory and expiring items
+3. The user selects a recommended recipe
+4. The recipe is displayed with ingredients, instructions, and a “Made it” button
+5. When the user taps “Made it,” the app stores the recipe in `recipe_history`
+6. The app also records the ingredient usage in `food_usage_events`
+7. Those usage events are then aggregated to compute:
+   - the most consumed food categories for the week
+   - the top expiring items
+   - the items most likely to be used next
+   - personalized recipe recommendations based on what the household actually makes
+
+### Technical implementation details
+
+#### Backend endpoints
+
+Suggested server routes:
+
+- `GET /api/recipes` — returns recommended and saved recipes for a user
+- `POST /api/recipes` — creates a user-created recipe
+- `GET /api/recipes/favorites` — returns favorite recipes
+- `POST /api/recipes/:id/favorite` — toggles favorite state
+- `POST /api/recipes/:id/made` — marks a recipe as made and logs usage
+- `GET /api/insights/top-expiring-items` — returns inventory items closest to expiration
+- `GET /api/insights/top-consumed-categories` — returns categories with the highest recipe usage over the last 7 days
+
+#### Recommendation logic
+
+The recipe recommendation endpoint should combine:
+
+- current inventory from `food_items`
+- expiring items from `expiration_date`
+- user recipe history from `recipe_history`
+- favorite recipes from `recipe_favorites`
+- the home’s most-used categories from `food_usage_events`
+
+Then Gemini can generate recipe suggestions like:
+
+- “Use these spinach, eggs, and feta ingredients before they expire”
+- “Based on your household’s most-consumed protein and grain categories, here are three recipes to make this week”
+
+#### How “Made” updates the insights
+
+When a user clicks “Made it,” do this:
+
+1. Look up the recipe ingredients
+2. Match each ingredient to a food item in `food_items` by normalized name
+3. Reduce the matching inventory quantity by the recipe’s amount, or log the usage event separately if inventory should remain intact
+4. Insert a record into `recipe_history`
+5. Insert one or more `food_usage_events` rows for each consumed ingredient
+6. Recompute weekly insight aggregates for top categories and expiring items
+
+This creates a feedback loop:
+
+- recipes generate consumption data
+- consumption data improves recommendations
+- recommendations become more useful for the current household
+
+#### How Gemini fits in
+
+Gemini should be responsible only for:
+
+- extracting grocery items from receipt scans
+- recommending recipes based on available food, weekly trends, and household usage patterns
+- returning recipe suggestions in structured JSON to the frontend
+
+Gemini should not be the system of record for user favorites, recipe history, or weekly consumption analytics. Those should be stored in PostgreSQL and used as the data source for future recommendations.
+
+#### UI requirement
+
+The app should not show a broad financial or warehouse-type analytics dashboard. The user experience should be focused on:
+
+- receipt scanning in the first tab
+- Gemini recipe recommendations in the second tab
+- saved recipes and favorites in the third tab
+- weekly summary of top expiring items and most consumed categories in the fourth tab
 
 ### Recipe recommendation UX
 
@@ -325,8 +420,9 @@ Based on the repository contents, the project is in the early-to-middle build ph
 ### Phase 4: Improve the product experience
 
 - Add sorting, filtering, and “use soon”/“expired” views
-- Consider low-stock or soon-to-expire warnings
+- Add a weekly insight panel with top expiring items and most consumed categories
 - Add a way to remove or edit items from the inventory
+- Add a recipe recommendation tab with saved favorites and a made-history list
 - Add testing around API routes and frontend behavior
 
 ### Phase 5: Production readiness
