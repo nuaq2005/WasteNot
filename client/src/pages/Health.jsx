@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { getFoods, getRecipeRecommendations, getWeeklyInsights } from "../api";
+import {
+  getFoods,
+  getRecipeFavorites,
+  getRecipeRecommendations,
+  getWeeklyInsights,
+  saveRecipeFavorite,
+  deleteRecipeFavorite,
+} from "../api";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -18,6 +25,14 @@ function expirationLabel(days) {
   return `${days} days left`;
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 export default function Health() {
   const [expiringFoods, setExpiringFoods] = useState([]);
   const [period, setPeriod] = useState(null);
@@ -27,6 +42,9 @@ export default function Health() {
   const [recommendationInventory, setRecommendationInventory] = useState([]);
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
   const [recommendationError, setRecommendationError] = useState("");
+  const [favorites, setFavorites] = useState([]);
+  const [favoriteBusy, setFavoriteBusy] = useState("");
+  const [favoriteError, setFavoriteError] = useState("");
 
   useEffect(() => {
     getWeeklyInsights()
@@ -48,6 +66,12 @@ export default function Health() {
       .finally(() => setLoadingFoods(false));
   }, []);
 
+  useEffect(() => {
+    getRecipeFavorites()
+      .then(setFavorites)
+      .catch((error) => setFavoriteError(error.message));
+  }, []);
+
   async function generateRecommendations() {
     setLoadingRecommendations(true);
     setRecommendationError("");
@@ -59,6 +83,30 @@ export default function Health() {
       setRecommendationError(error.message);
     } finally {
       setLoadingRecommendations(false);
+    }
+  }
+
+  async function toggleFavorite(recipe) {
+    const recipeKey = stableJson(recipe);
+    const saved = favorites.find((favorite) => stableJson(favorite.recipe) === recipeKey);
+    setFavoriteBusy(recipeKey);
+    setFavoriteError("");
+    try {
+      if (saved) {
+        await deleteRecipeFavorite(saved.id);
+        setFavorites((current) => current.filter((favorite) => favorite.id !== saved.id));
+      } else {
+        const usedIds = new Set(recipe.usesInventory.map((used) => Number(used.foodId)));
+        const inventorySnapshot = recommendationInventory
+          .filter((food) => usedIds.has(Number(food.id)))
+          .map((food) => ({ ...food }));
+        const favorite = await saveRecipeFavorite({ recipe, inventorySnapshot });
+        setFavorites((current) => [favorite, ...current]);
+      }
+    } catch (error) {
+      setFavoriteError(error.message);
+    } finally {
+      setFavoriteBusy("");
     }
   }
 
@@ -133,12 +181,31 @@ export default function Health() {
         </p>
         {loadingRecommendations && <p style={styles.status}>Asking Gemini for ideas…</p>}
         {recommendationError && <p role="alert" style={styles.error}>{recommendationError}</p>}
+        {favoriteError && <p role="alert" style={styles.error}>{favoriteError}</p>}
         {!loadingRecommendations && !recommendationError && recommendations.length === 0 && (
           <p style={styles.status}>Generate ideas when you’re ready. Recommendations use current saved inventory and are not saved or deducted automatically.</p>
         )}
         {!loadingRecommendations && recommendations.map((recipe, index) => (
           <article key={`${recipe.name}-${index}`} style={styles.recipe}>
-            <h4 style={styles.recipeTitle}>{recipe.name}</h4>
+            <div style={styles.recipeHeading}>
+              <h4 style={styles.recipeTitle}>{recipe.name}</h4>
+              {(() => {
+                const recipeKey = stableJson(recipe);
+                const isFavorite = favorites.some((favorite) => stableJson(favorite.recipe) === recipeKey);
+                return (
+                  <button
+                    type="button"
+                    style={{ ...styles.heartButton, ...(isFavorite ? styles.heartButtonActive : {}) }}
+                    aria-label={`${isFavorite ? "Remove" : "Save"} ${recipe.name} ${isFavorite ? "from" : "to"} Favourites`}
+                    aria-pressed={isFavorite}
+                    disabled={favoriteBusy === recipeKey}
+                    onClick={() => toggleFavorite(recipe)}
+                  >
+                    {favoriteBusy === recipeKey ? "…" : isFavorite ? "♥" : "♡"}
+                  </button>
+                );
+              })()}
+            </div>
             {recipe.description && <p style={styles.recipeDescription}>{recipe.description}</p>}
             <h5 style={styles.subheading}>Uses from your inventory</h5>
             <ul style={styles.compactList}>
@@ -188,7 +255,10 @@ const styles = {
   expiration: { borderRadius: "999px", background: "#fff0c2", padding: "4px 10px", fontSize: "13px" },
   expired: { background: "#ffd6d6", color: "#8d2222" },
   recipe: { borderTop: "1px solid #eef2f7", paddingTop: "14px", marginTop: "14px" },
+  recipeHeading: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" },
   recipeTitle: { margin: "0 0 6px", fontSize: "18px" },
+  heartButton: { border: "1px solid #ded6e4", borderRadius: "999px", background: "#fff", color: "#796b80", cursor: "pointer", fontSize: "24px", lineHeight: 1, minWidth: "42px", minHeight: "42px" },
+  heartButtonActive: { color: "#c13d68", borderColor: "#e6a6b9", background: "#fff3f6" },
   recipeDescription: { color: "#555" },
   subheading: { margin: "14px 0 6px" },
   compactList: { paddingLeft: "22px", margin: "6px 0", lineHeight: 1.6 },

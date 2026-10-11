@@ -29,6 +29,17 @@ export const getFoods = () => request("/api/foods");
 export const getWeeklyInsights = () => request("/api/insights/weekly");
 export const getRecipeRecommendations = () =>
   request("/api/recommendations/recipes", { method: "POST" });
+export const getRecipeFavorites = () =>
+  request("/api/recipe-recommendation-favorites");
+export const saveRecipeFavorite = (favorite) =>
+  request("/api/recipe-recommendation-favorites", {
+    method: "POST",
+    body: JSON.stringify(favorite),
+  });
+export const deleteRecipeFavorite = (id) =>
+  request(`/api/recipe-recommendation-favorites/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 export const createVitalsSession = () =>
   request("/api/vitals/sessions", { method: "POST" });
 export const stopVitalsSession = (token) =>

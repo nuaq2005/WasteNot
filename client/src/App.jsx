@@ -4,6 +4,7 @@ import CheckFridge from './pages/CheckFridge.jsx'
 import ScanReceipt from './pages/ScanReceipt.jsx'
 import Health from './pages/Health.jsx'
 import Vitals from './pages/Vitals.jsx'
+import Favourites from './pages/Favourites.jsx'
 import './App.css'
 
 const tabs = [
@@ -11,6 +12,7 @@ const tabs = [
   { id: 'receipt', label: 'Scan Receipt', Component: ScanReceipt },
   { id: 'health', label: 'Health', Component: Health },
   { id: 'vitals', label: 'Vitals', Component: Vitals },
+  { id: 'favourites', label: 'Favourites', Component: Favourites },
 ]
 
 function App() {

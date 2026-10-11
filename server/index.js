@@ -207,16 +207,15 @@ app.get("/api/insights/weekly", async (req, res) => {
 
 app.post("/api/recommendations/recipes", async (req, res) => {
   try {
-    // 1. Fetch the user's inventory from TigerData.
+    // 1. Fetch the shared inventory from TigerData.
     const result = await pool.query(`
       SELECT
         id, name, quantity, unit, expiration_date,
         expiration_is_estimated, protein_g, carbs_g,
-        fiber_g, sugar_g
+        fiber_g, sugar_g, receipt_line_total
       FROM food_items
-      WHERE user_id = $1
       ORDER BY expiration_date ASC NULLS LAST
-    `, ["demo-user"]);
+    `);
 
     const inventory = result.rows.map((food) => ({
       id: Number(food.id),
@@ -228,7 +227,10 @@ app.post("/api/recommendations/recipes", async (req, res) => {
       proteinG: food.protein_g,
       carbsG: food.carbs_g,
       fiberG: food.fiber_g,
-      sugarG: food.sugar_g
+      sugarG: food.sugar_g,
+      receiptLineTotal: food.receipt_line_total == null
+        ? null
+        : Number(food.receipt_line_total)
     }));
 
     if (inventory.length === 0) {
@@ -306,42 +308,11 @@ Return JSON only, with this structure:
       ? parsed.recipes
       : [];
 
-    // 3. Save each generated recipe to TigerData.
-    const savedRecipes = [];
-
-    for (const recipe of recipes) {
-      const saved = await pool.query(
-        `INSERT INTO recipes (
-          user_id,
-          name,
-          description,
-          uses_inventory,
-          additional_ingredients,
-          instructions
-        )
-        VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb)
-        RETURNING *`,
-        [
-          "demo-user",
-          recipe.name,
-          recipe.description ?? null,
-          JSON.stringify(recipe.usesInventory ?? []),
-          JSON.stringify(recipe.additionalIngredients ?? []),
-          JSON.stringify(recipe.instructions ?? [])
-        ]
-      );
-
-      savedRecipes.push(saved.rows[0]);
-    }
-
-    // 4. Return recipes in the format Health.jsx expects.
+    // 3. Return recipes in the format Health.jsx expects. They are saved only
+    // when the user explicitly favourites one.
     res.json({
       recipes,
-      inventory: inventory.map((food) => ({
-        ...food,
-        receiptLineTotal: null
-      })),
-      savedRecipes
+      inventory
     });
 
   } catch (error) {
@@ -350,6 +321,77 @@ Return JSON only, with this structure:
     res.status(500).json({
       error: "Recipe generation failed. Please try again."
     });
+  }
+});
+
+app.get("/api/recipe-recommendation-favorites", async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, recipe_snapshot AS recipe,
+              inventory_snapshot AS "inventorySnapshot", created_at AS "createdAt"
+         FROM generated_recipe_favorites
+        ORDER BY created_at DESC, id DESC`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Could not load recipe favourites:", error);
+    res.status(500).json({ error: "Could not load recipe favourites." });
+  }
+});
+
+app.post("/api/recipe-recommendation-favorites", async (req, res) => {
+  const { recipe, inventorySnapshot } = req.body ?? {};
+  const usedFoodIds = Array.isArray(recipe?.usesInventory)
+    ? recipe.usesInventory.map((used) => Number(used.foodId))
+    : [];
+
+  if (
+    !recipe || typeof recipe !== "object" || Array.isArray(recipe) ||
+    typeof recipe.name !== "string" || !recipe.name.trim() ||
+    !Array.isArray(recipe.usesInventory) ||
+    !Array.isArray(recipe.additionalIngredients) ||
+    !Array.isArray(recipe.instructions) ||
+    !Array.isArray(inventorySnapshot) ||
+    inventorySnapshot.length > 50 ||
+    inventorySnapshot.some((food) => !food || !Number.isInteger(Number(food.id))) ||
+    usedFoodIds.some((id) => !Number.isInteger(id)) ||
+    usedFoodIds.some((id) => !inventorySnapshot.some((food) => Number(food.id) === id))
+  ) {
+    return res.status(400).json({ error: "A valid generated recipe snapshot is required." });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO generated_recipe_favorites (recipe_snapshot, inventory_snapshot)
+       VALUES ($1::jsonb, $2::jsonb)
+       RETURNING id, recipe_snapshot AS recipe,
+                 inventory_snapshot AS "inventorySnapshot", created_at AS "createdAt"`,
+      [JSON.stringify(recipe), JSON.stringify(inventorySnapshot)]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error("Could not save recipe favourite:", error);
+    res.status(500).json({ error: "Could not save this recipe to Favourites." });
+  }
+});
+
+app.delete("/api/recipe-recommendation-favorites/:id", async (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) {
+    return res.status(400).json({ error: "A valid favourite ID is required." });
+  }
+
+  try {
+    const result = await pool.query(
+      `DELETE FROM generated_recipe_favorites WHERE id = $1 RETURNING id`,
+      [req.params.id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Favourite not found." });
+    }
+    res.json({ deleted: true, id: result.rows[0].id });
+  } catch (error) {
+    console.error("Could not remove recipe favourite:", error);
+    res.status(500).json({ error: "Could not remove this favourite." });
   }
 });
 
