@@ -14,7 +14,13 @@ const pool = new Pool({
   },
 });
 
-app.use(cors({ origin: "http://localhost:5173" }));
+app.use(cors({
+  origin: [
+    "https://wastenot-lake.vercel.app",
+    "http://localhost:5173"
+  ]
+}));
+
 app.use(express.json());
 
 const http = require("node:http");
@@ -401,7 +407,5 @@ server.on("upgrade", (request, socket, head) => {
   });
 });
 
-server.listen(process.env.PORT || 3001, () => {
-  console.log("WasteNot API running on port " + (process.env.PORT || 3001));
-});
-
+// Export the server for use in other modules.
+module.exports = server;

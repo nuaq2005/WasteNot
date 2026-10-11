@@ -1,13 +1,23 @@
 // client/src/api.js
-const BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
-async function request(path, options) {
-  const res = await fetch(`${BASE}${path}`, options);
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `Request failed (${res.status})`);
+// API functions for interacting with the WasteNot backend changed for vercel
+const BASE = "";
+
+export async function request(path, options = {}) {
+  const response = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...options.headers,
+    },
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `API request failed: ${response.status}`);
   }
-  return res.json();
+
+  return response.json();
 }
 
 export const getFoods = () => request("/api/foods");
