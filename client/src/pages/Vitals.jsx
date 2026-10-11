@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createVitalsSession, getVitalsWebSocketUrl, stopVitalsSession } from "../api";
 
-const FRAME_INTERVAL_MS = 50;
+const FRAME_INTERVAL_MS = 40;
 
 function metricText(metric, suffix = "") {
   if (!metric) return "Waiting for signal";
