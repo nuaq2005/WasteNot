@@ -219,7 +219,7 @@ The Snowflake SQL aggregation is the appropriate place for deterministic
 The exact Presage endpoint, request schema, and authentication cannot be
 specified reliably until the vendor API/SDK and credentials are selected.
 
-## Can Gemini do this?
+## Can Gemini do recipe recommendations based on RECEIPT and presage information?
 
 Yes, Gemini can technically receive inventory, recipe ingredients, and usage
 history and generate recipe suggestions or natural-language summaries. The
@@ -239,10 +239,3 @@ Gemini recipe generation is not implemented today: it is only used for receipt
 parsing. Recipe history, nutrient usage data, and recipe recommendation routes
 must be added before Gemini can make grounded, household-specific suggestions.
 
-## Environment and security requirements
-
-When adding Snowflake or Presage, store credentials in server environment
-variables and update `server/.env.example` with **variable names only**. Never
-put secrets in `client/.env*`, `VITE_*` variables, client JavaScript, or this
-document. Add dependency versions to `server/package.json` only after selecting
-the official supported SDKs and confirming their API usage.
