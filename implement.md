@@ -17,6 +17,9 @@ now contains two insight panels:
    ingredients, favorites, history, and marking a recipe made. Cortex estimates
    protein, carbohydrates, fiber, and sugar; the server validates and snapshots
    those values in PostgreSQL, then syncs them to Snowflake.
+4. **Vitals** — the new tab uses PresageTech SmartSpectra to estimate pulse,
+   breathing rate, and HRV from a live camera session. It does not analyze one
+   still photo and does not save camera frames or measurements.
 
 The application code and Snowflake driver are present. Live Cortex and
 warehouse queries require the server-side Snowflake settings in
@@ -55,7 +58,10 @@ make expiration visibility depend on a delayed warehouse sync.
 | `server/index.js` | Provide recipe, favorite, made-history, and weekly-insights routes; retry unsynced nutrient snapshots. |
 | `client/src/api.js` | Provide `getWeeklyInsights()` for the weekly insights endpoint. |
 | `client/src/pages/Health.jsx` | Render estimated nutrition totals and expiring inventory with separate loading/error behavior and an expiry fallback. |
-| Presage integration | Optional and not implemented. Add only if the product later requires vendor-backed waste-risk predictions. |
+| `server/services/presage.js` | Manage transient SmartSpectra sessions, decode metrics, convert incoming JPEG frames to RGB, and enforce session/frame limits. |
+| `client/src/pages/Vitals.jsx` | Provide camera permission/start/stop controls, preview, validation feedback, live readings, confidence, and privacy/health notices. |
+| `client/src/App.jsx` | Add the Vitals navigation tab. |
+| `server/index.js` | Create short-lived measurement sessions and accept same-origin WebSocket video frames. |
 
 The server connects to Tiger (Tiger Data), which provides PostgreSQL-compatible
 database service. Use PostgreSQL SQL and the `pg` driver already present in the
@@ -122,28 +128,70 @@ The made endpoint records each recipe ingredient as a food-usage event, scaling 
 
 If the warehouse is temporarily unavailable, a made event and nutrient snapshot remain in Tiger with a pending sync marker. The next weekly insights request retries the sync. The Health screen falls back to the inventory API so expiration visibility does not depend on Snowflake availability.
 
-## Where Presage should be used
+## Presage SmartSpectra Vitals integration
 
-Presage is not currently imported or called anywhere in the repository. If the
-product requirements call for predicted food-waste risk, likely usage, or
-prioritization beyond transparent date-based sorting:
+PresageTech's SmartSpectra SDK measures wellness metrics from changing camera
+frames. It cannot produce these measurements from one still photo. The Vitals
+tab starts an explicit live camera session, explains capture conditions, shows
+SmartSpectra validation feedback, and lets the user stop the session.
 
-- Put vendor API/authentication code in a server-only
-  `server/services/presage.js` adapter.
-- Call that adapter from a server endpoint such as
-  `GET /api/insights/waste-risk`, after supplying the current inventory and
-  relevant recipe/usage history.
-- Return prediction scores and explanations to the client and render them as
-  *predictions*, distinct from actual expiry dates or measured nutrition totals.
-- Keep `GET /api/foods` and the date-based expiring-food list as the
-  authoritative inventory data; Presage predictions should not overwrite it.
+### User-visible behavior
 
-Presage should not be inserted into the nutrition aggregation path unless its
-documented product specifically provides the required nutritional analytics.
-The Snowflake SQL aggregation is the appropriate place for deterministic
-“which nutrient category had the largest recorded recipe usage?” calculations.
-The exact Presage endpoint, request schema, and authentication cannot be
-specified reliably until the vendor API/SDK and credentials are selected.
+- The **Vitals** tab is wired in `client/src/App.jsx` and rendered by
+  `client/src/pages/Vitals.jsx`.
+- Ask for camera permission only after the user chooses to start a measurement.
+- Show the camera preview, camera/lighting/framing guidance, current validation
+  status, and a clear stop control. Do not save or record camera frames.
+- Display only metrics actually returned by SmartSpectra, with confidence and
+  capture duration. Document warm-up expectations: pulse rate needs about 12
+  seconds; breathing rate about 30 seconds; HRV about 60 seconds.
+- Label results as general-wellness information. Do not present the relative
+  arterial-pressure waveform as blood pressure, or provide diagnosis or
+  treatment advice. SmartSpectra states its metrics are not FDA-cleared for
+  diagnosis or treatment.
+
+### Integration and privacy details
+
+- The existing app is a browser-based React/Vite client with an Express/Node
+  server. Presage's Node.js SDK is a native Node/Electron SDK, not a browser
+  package. Keep the SmartSpectra API key server-side in `PRESAGE_API_KEY`.
+- For the existing browser app, capture frames with the browser camera after
+  user permission and feed them to the SmartSpectra Node SDK through its custom
+  frame input. This requires a real-time client-to-server frame transport and
+  server-side session lifecycle. Camera frames cross the app server for
+  processing, must be transient, and must never be written to disk or logged.
+  The UI and privacy notice must say this before the user starts.
+- Use `@smartspectra/node-sdk` only in the server process. Create a dedicated
+  `server/services/presage.js` adapter that creates/destroys one SDK session per
+  user capture, feeds RGB frames with monotonic timestamps, and emits only
+  decoded metrics, confidence, validation status, and sanitized errors to the
+  browser. Limit session duration, frame dimensions/rate, request sizes, and
+  concurrent sessions. Do not persist health measurements unless separately
+  specified and approved.
+- Use an unguessable short-lived session token for the WebSocket connection,
+  validate the browser origin, cap active sessions and frame size/rate, and
+  clean up the SDK session on disconnect or timeout. The current app has no
+  user login; this does not provide identity or account-level access control.
+- Read `PRESAGE_API_KEY` from `server/.env`; never expose it through Vite
+  environment variables or send it to the browser. Return a clear
+  configuration error if the key is absent.
+- Check SmartSpectra plan/credits and SDK platform compatibility before
+  deployment. The Node SDK requires a supported server platform and currently
+  supported Node.js runtime. A native mobile app is an alternative that runs
+  the platform SDK directly on the device and avoids forwarding camera frames
+  through the WasteNot server.
+- Do not implement food-waste prediction under this integration: SmartSpectra
+  is for camera-based vital measurements. Keep those results separate from
+  inventory, food nutrition, and Snowflake analytics.
+
+The browser sends JPEG frames to the WasteNot server over a WebSocket. The
+server converts each frame to RGB and feeds it to SmartSpectra's custom-input
+pipeline. Frames and measurements are transient; neither is stored in Tiger or
+Snowflake. `PRESAGE_API_KEY` stays in `server/.env`. Camera access requires
+localhost or HTTPS, and production deployments must use HTTPS/WSS. The SDK
+metrics are for general wellness and are not cleared for medical diagnosis or
+treatment. Relative arterial-pressure waveforms must not be presented as blood
+pressure readings.
 
 ## Can Gemini do recipe recommendations based on RECEIPT and presage information?
 

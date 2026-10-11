@@ -2,13 +2,21 @@
 // Initialize the database
 require("dotenv").config();
 
+const http = require("node:http");
 const express = require("express");
 const cors = require("cors");
 const { Pool, types } = require("pg");
+const { WebSocketServer } = require("ws");
 types.setTypeParser(1082, (v) => v); // DATE -> string
 const snowflakeService = require("./services/snowflake");
+const presageService = require("./services/presage");
 
 const app = express();
+const allowedWebOrigins = new Set([
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  ...(process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim()) : []),
+]);
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
@@ -16,7 +24,11 @@ const pool = new Pool({
   },
 });
 
-app.use(cors({ origin: "http://localhost:5173" }));
+app.use(cors({
+  origin(origin, callback) {
+    callback(null, !origin || allowedWebOrigins.has(origin));
+  },
+}));
 app.use(express.json());
 
 // Test database connection
@@ -32,6 +44,26 @@ app.get("/api/health", async (req, res) => {
       detail: err.message
     });
   }
+});
+
+app.post("/api/vitals/sessions", async (req, res) => {
+  if (!allowedWebOrigins.has(req.get("origin"))) {
+    return res.status(403).json({ error: "Vitals sessions must be started from the WasteNot app." });
+  }
+  try {
+    res.status(201).json(await presageService.createSession());
+  } catch (error) {
+    console.error("Vitals session could not start:", error.message);
+    res.status(error.status || 503).json({ error: error.message || "Could not start a vitals session." });
+  }
+});
+
+app.delete("/api/vitals/sessions/:token", (req, res) => {
+  if (!allowedWebOrigins.has(req.get("origin"))) {
+    return res.status(403).json({ error: "Vitals sessions must be stopped from the WasteNot app." });
+  }
+  presageService.closeSession(req.params.token);
+  res.status(204).end();
 });
 
 // Get fridge inventory
@@ -481,6 +513,33 @@ app.use((err, req, res, next) => {
   res.status(400).json({ error: err.message });
 });
 
-app.listen(process.env.PORT || 3001, () => {
-  console.log("WasteNot API running on port 3001");
+const server = http.createServer(app);
+const vitalsSockets = new WebSocketServer({ noServer: true, maxPayload: 512 * 1024 });
+
+server.on("upgrade", (request, socket, head) => {
+  let requestUrl;
+  try {
+    requestUrl = new URL(request.url, `http://${request.headers.host}`);
+  } catch {
+    socket.destroy();
+    return;
+  }
+  const origin = request.headers.origin;
+  const token = requestUrl.searchParams.get("token");
+  if (
+    requestUrl.pathname !== "/api/vitals/stream" ||
+    !origin || !allowedWebOrigins.has(origin) ||
+    !token || !presageService.hasSession(token)
+  ) {
+    socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  vitalsSockets.handleUpgrade(request, socket, head, (webSocket) => {
+    presageService.attachSocket(token, webSocket);
+  });
+});
+
+server.listen(process.env.PORT || 3001, () => {
+  console.log(`WasteNot API running on port ${process.env.PORT || 3001}`);
 });
