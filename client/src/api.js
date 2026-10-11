@@ -1,19 +1,24 @@
 // client/src/api.js
 
 // API functions for interacting with the WasteNot backend changed for vercel
+// client/src/api.js
 const BASE = "";
 
 export async function request(path, options = {}) {
+  const isJsonString = typeof options.body === "string";
+
   const response = await fetch(`${BASE}${path}`, {
     ...options,
     headers: {
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(isJsonString ? { "Content-Type": "application/json" } : {}),
       ...options.headers,
     },
   });
 
   if (!response.ok) {
-    const message = await response.text();
+    const text = await response.text();
+    let message = text;
+    try { message = JSON.parse(text).error || text; } catch {}
     throw new Error(message || `API request failed: ${response.status}`);
   }
 
@@ -27,7 +32,7 @@ export const getRecipeRecommendations = () =>
 export const createVitalsSession = () =>
   request("/api/vitals/sessions", { method: "POST" });
 export const stopVitalsSession = (token) =>
-  fetch(`${BASE}/api/vitals/sessions/${encodeURIComponent(token)}`, { method: "DELETE" });
+  request(`/api/vitals/sessions/${encodeURIComponent(token)}`, { method: "DELETE" });
 
 export function getVitalsWebSocketUrl(token) {
   const url = new URL(BASE);
