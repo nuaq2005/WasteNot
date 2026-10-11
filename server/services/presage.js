@@ -12,7 +12,8 @@ const {
 
 const MAX_ACTIVE_SESSIONS = 2;
 const MAX_SESSION_MS = 90_000;
-const FRAME_INTERVAL_MS = 60;
+// Allow 25 FPS input (40 ms per frame) with a little timing jitter.
+const FRAME_INTERVAL_MS = 35;
 const MAX_FRAME_BYTES = 512 * 1024;
 const FRAME_WIDTH = 640;
 const FRAME_HEIGHT = 480;

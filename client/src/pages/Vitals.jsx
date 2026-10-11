@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createVitalsSession, getVitalsWebSocketUrl, stopVitalsSession } from "../api";
 
-const FRAME_INTERVAL_MS = 50;
+// 40 ms yields 25 sampled camera frames per second.
+const FRAME_INTERVAL_MS = 40;
 
 function metricText(metric, suffix = "") {
   if (!metric) return "Waiting for signal";
@@ -95,9 +96,15 @@ export default function Vitals() {
           facingMode: "user",
           width: { ideal: 640 },
           height: { ideal: 480 },
-          frameRate: { ideal: 24, max: 30 },
+          frameRate: { ideal: 30, min: 25, max: 30 },
         },
       });
+      const cameraTrack = stream.getVideoTracks()[0];
+      const cameraFps = Number(cameraTrack?.getSettings().frameRate);
+      if (Number.isFinite(cameraFps) && cameraFps < 25) {
+        stream.getTracks().forEach((track) => track.stop());
+        throw new Error(`Your camera is running at ${cameraFps} FPS. Select a camera mode that supports at least 25 FPS, then try again.`);
+      }
       if (!mountedRef.current || stoppingRef.current) {
         stream.getTracks().forEach((track) => track.stop());
         return;
@@ -135,7 +142,7 @@ export default function Vitals() {
           startedAtRef.current = Date.now();
           setStarting(false);
           setMeasuring(true);
-          setStatus("Measuring from live camera video");
+          setStatus(`Measuring from live camera video${cameraFps ? ` · ${Math.round(cameraFps)} FPS` : ""}`);
           captureTimerRef.current = setInterval(sendFrame, FRAME_INTERVAL_MS);
           elapsedTimerRef.current = setInterval(() => {
             setElapsedSeconds(Math.floor((Date.now() - startedAtRef.current) / 1000));
@@ -171,6 +178,8 @@ export default function Vitals() {
         setError("Camera permission was denied. Allow camera access in your browser settings and try again.");
       } else if (startError.name === "NotFoundError") {
         setError("No camera was found on this device.");
+      } else if (startError.name === "OverconstrainedError" && startError.constraint === "frameRate") {
+        setError("This camera mode cannot provide 25 FPS. Select a mode that supports at least 25 FPS and try again.");
       } else {
         setError(startError.message || "Could not start the vitals measurement.");
       }
