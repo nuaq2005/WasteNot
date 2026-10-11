@@ -103,6 +103,8 @@ async function createSession() {
     closed: false,
     frameBusy: false,
     lastFrameAt: 0,
+    frameRateWindowStartedAt: Date.now(),
+    framesInRateWindow: 0,
     lastTimestampUs: 0,
     startedAt: Date.now(),
     expiryTimer: null,
@@ -184,6 +186,17 @@ function attachSocket(token, socket) {
           PixelFormat.kRGB,
           session.lastTimestampUs
         );
+        session.framesInRateWindow += 1;
+        const now = Date.now();
+        const elapsed = now - session.frameRateWindowStartedAt;
+        if (elapsed >= 1000) {
+          send(session, {
+            type: "frameRate",
+            framesPerSecond: Math.round((session.framesInRateWindow * 1000) / elapsed),
+          });
+          session.framesInRateWindow = 0;
+          session.frameRateWindowStartedAt = now;
+        }
       })
       .catch(() => send(session, { type: "error", error: "Could not process a camera frame." }))
       .finally(() => { session.frameBusy = false; });

@@ -33,6 +33,7 @@ export default function Vitals() {
   const [status, setStatus] = useState("Camera is off");
   const [validation, setValidation] = useState("Start a session and keep your face centered in even light.");
   const [metrics, setMetrics] = useState({ pulseRate: null, breathingRate: null, hrv: null });
+  const [sdkFrameRate, setSdkFrameRate] = useState(null);
   const [error, setError] = useState("");
 
   function releaseResources() {
@@ -80,6 +81,7 @@ export default function Vitals() {
     if (starting || measuring) return;
     setError("");
     setMetrics({ pulseRate: null, breathingRate: null, hrv: null });
+    setSdkFrameRate(null);
     setElapsedSeconds(0);
     setValidation("Center your face in the frame and stay still.");
     setStatus("Requesting camera access…");
@@ -151,6 +153,8 @@ export default function Vitals() {
           setValidation(payload.hint || "Adjust your position for a better signal.");
         } else if (payload.type === "metrics") {
           setMetrics(payload.metrics);
+        } else if (payload.type === "frameRate") {
+          setSdkFrameRate(payload.framesPerSecond);
         } else if (payload.type === "error") {
           setError(payload.error || "SmartSpectra could not process this session.");
           stopMeasurement("Measurement stopped after a service error.");
@@ -231,7 +235,7 @@ export default function Vitals() {
         <p style={styles.eyebrow}>PRESAGETECH SMARTSPECTRA</p>
         <h2>Camera vitals</h2>
         <p style={styles.description}>
-          Use a short live camera session to estimate pulse, breathing rate, and HRV. A single still photo cannot provide these measurements.
+          Use bright, even light on your face and keep the camera steady. Low light can make the camera lower its frame rate. A single still photo cannot provide these measurements.
         </p>
       </header>
 
@@ -244,6 +248,12 @@ export default function Vitals() {
             {(measuring || starting) && <span> · {elapsedSeconds}s</span>}
           </div>
           <p style={styles.validation} aria-live="polite">{validation}</p>
+          {measuring && sdkFrameRate != null && (
+            <p style={sdkFrameRate < 25 ? styles.error : styles.status} aria-live="polite">
+              Frames reaching SmartSpectra: {sdkFrameRate} FPS
+              {sdkFrameRate < 25 ? " · add bright, even light and close other camera or CPU-heavy apps" : ""}
+            </p>
+          )}
           {measuring ? (
             <button type="button" style={styles.button} onClick={() => stopMeasurement()}>
               Stop measurement
