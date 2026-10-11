@@ -18,6 +18,7 @@ async function migrate() {
   const migrationFiles = [
     "001_initial_schema.sql",
     "002_food_receipt_line_total.sql",
+    "003_generated_recipe_favorites.sql",
   ];
   const client = await pool.connect();
   try {

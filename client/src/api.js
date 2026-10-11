@@ -15,11 +15,15 @@ export async function request(path, options = {}) {
     },
   });
 
+  const method = options.method || "GET";
   const contentType = response.headers.get("content-type") || "";
+  if (response.status === 404) {
+    throw new Error(`API route not found: ${method} ${path}. Restart the backend so it loads the current routes.`);
+  }
   if (!contentType.includes("application/json")) {
     const isHtml = contentType.includes("text/html");
     throw new Error(isHtml
-      ? `The API returned a web page instead of JSON (${response.status}). Check that the backend is running on port 3001 and restart the client dev server.`
+      ? `The API returned a web page instead of JSON for ${method} ${path} (${response.status}). Check the backend route and Vite proxy.`
       : `The API returned an unexpected response (${response.status}).`);
   }
 
@@ -34,6 +38,17 @@ export const getFoods = () => request("/api/foods");
 export const getWeeklyInsights = () => request("/api/insights/weekly");
 export const getRecipeRecommendations = () =>
   request("/api/recommendations/recipes", { method: "POST" });
+export const getRecipeFavorites = () =>
+  request("/api/recipe-recommendation-favorites");
+export const saveRecipeFavorite = (favorite) =>
+  request("/api/recipe-recommendation-favorites", {
+    method: "POST",
+    body: JSON.stringify(favorite),
+  });
+export const deleteRecipeFavorite = (id) =>
+  request(`/api/recipe-recommendation-favorites/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 export const createVitalsSession = () =>
   request("/api/vitals/sessions", { method: "POST" });
 export const stopVitalsSession = (token) =>
