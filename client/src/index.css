@@ -52,6 +52,7 @@
 
 body {
   margin: 0;
+  background-color: #f5f8fa;
 }
 
 #root {
@@ -109,3 +110,4 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+

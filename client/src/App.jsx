@@ -6,6 +6,7 @@ import Health from './pages/Health.jsx'
 import Vitals from './pages/Vitals.jsx'
 import './App.css'
 
+
 const tabs = [
   { id: 'fridge', label: 'Check Fridge', Component: CheckFridge },
   { id: 'receipt', label: 'Scan Receipt', Component: ScanReceipt },
@@ -19,6 +20,10 @@ function App() {
 
   return (
     <>
+      <header className="app-header">
+        <h1 className="app-title">WasteNot</h1>
+        <p className="app-subtitle">Cook smart. Spend wisely. Waste less.</p>
+      </header>
       <nav className="tabs">
         {tabs.map((t) => (
           <button
