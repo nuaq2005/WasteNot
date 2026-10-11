@@ -15,14 +15,19 @@ export async function request(path, options = {}) {
     },
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    let message = text;
-    try { message = JSON.parse(text).error || text; } catch {}
-    throw new Error(message || `API request failed: ${response.status}`);
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const isHtml = contentType.includes("text/html");
+    throw new Error(isHtml
+      ? `The API returned a web page instead of JSON (${response.status}). Check that the backend is running on port 3001 and restart the client dev server.`
+      : `The API returned an unexpected response (${response.status}).`);
   }
 
-  return response.json();
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || `API request failed: ${response.status}`);
+  }
+  return data;
 }
 
 export const getFoods = () => request("/api/foods");
