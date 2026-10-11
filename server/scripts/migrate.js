@@ -15,14 +15,20 @@ const pool = new Pool({
 });
 
 async function migrate() {
-  const migrationPath = path.join(__dirname, "../migrations/001_initial_schema.sql");
-  const sql = fs.readFileSync(migrationPath, "utf8");
+  const migrationFiles = [
+    "001_initial_schema.sql",
+    "002_food_receipt_line_total.sql",
+  ];
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
-    await client.query(sql);
-    await client.query("COMMIT");
-    console.log("Applied 001_initial_schema.sql");
+    for (const filename of migrationFiles) {
+      const migrationPath = path.join(__dirname, "../migrations", filename);
+      const sql = fs.readFileSync(migrationPath, "utf8");
+      await client.query("BEGIN");
+      await client.query(sql);
+      await client.query("COMMIT");
+      console.log(`Applied ${filename}`);
+    }
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

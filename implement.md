@@ -1,63 +1,62 @@
-# Nutrition and expiration insights implementation
+# Health insights and Gemini recipe recommendations
 
 ## What is implemented now
 
 The UI is in [client/src/pages/Health.jsx](./client/src/pages/Health.jsx), which
 is rendered by the existing **Health** tab in [client/src/App.jsx](./client/src/App.jsx).
-The section that previously contained the “Presage SDK + Snowflake placeholder”
-now contains two insight panels:
+It displays expired foods and foods expiring within seven days, then offers a
+user-triggered Gemini recipe recommender below that panel. Recommendations use
+saved inventory name, quantity, expiration, and receipt line total. Gemini
+suggestions are not saved or deducted from inventory automatically.
 
-1. **Top nutrition categories** — `GET /api/insights/weekly` reads usage totals
-   from Snowflake and shows Cortex nutrient estimates saved when a recipe is
-   marked made. Values are labeled as estimates.
-2. **Expiring foods** — the weekly endpoint filters current Tiger inventory in
-   SQL. If Snowflake is unavailable, the Health page falls back to
-   `GET /api/foods` so expiration visibility remains available.
-3. **Recipe storage and made history** — the API supports shared recipes,
-   ingredients, favorites, history, and marking a recipe made. Cortex estimates
-   protein, carbohydrates, fiber, and sugar; the server validates and snapshots
-   those values in PostgreSQL, then syncs them to Snowflake.
-4. **Vitals** — the new tab uses PresageTech SmartSpectra to estimate pulse,
-   breathing rate, and HRV from a live camera session. It does not analyze one
-   still photo and does not save camera frames or measurements.
+Receipt scans already return item prices for review. Saving a receipt now
+persists each item’s receipt **line total** in Tiger/PostgreSQL through the
+`receipt_line_total` column. It is the amount paid for the receipt row, not a
+unit price or recipe cost. The Health recommender considers larger line totals
+as one prioritization signal alongside expiration and available quantity.
 
-The application code and Snowflake driver are present. Live Cortex and
-warehouse queries require the server-side Snowflake settings in
-`server/.env.example` and the warehouse table in `server/snowflake/schema.sql`.
-Until those are configured, the recipe-made endpoint cannot create nutrient
-estimates and weekly nutrition insights return an error; food expiry still
-works.
+Snowflake and Cortex runtime use is paused because the API is not currently
+being used. The Snowflake service, driver, schema, and historical nutrient
+tables remain in the repository for possible later reactivation, but the server
+does not import the Snowflake service, make Snowflake/Cortex calls, or display a
+Snowflake nutrition panel. Recipe-made events continue to save recipe history
+and ingredient-usage events in Tiger only; they do not create nutrient
+estimates. The Vitals tab continues to use Presage SmartSpectra as described
+below.
 
 ## Recommended data flow
 
 ```text
-Recipe marked as made
-  -> server records recipe history and ingredient/nutrient usage in PostgreSQL
-  -> sync usage records to Snowflake
-  -> Snowflake SQL aggregates grams of protein/carbohydrates/etc. by category
-  -> GET /api/insights/weekly combines Snowflake aggregates with current
-     expiring inventory from PostgreSQL
-  -> client/src/api.js fetches the endpoint
-  -> client/src/pages/Health.jsx renders the real insight values
+Receipt scan
+  -> user reviews item names, quantities, expiration dates, and receipt line totals
+  -> POST /api/foods stores inventory in Tiger/PostgreSQL
+  -> GET /api/insights/weekly returns the date window and SQL-filtered expiring foods
+  -> Health displays the expiring-foods panel
+  -> user clicks Generate recipe ideas
+  -> POST /api/recommendations/recipes reads current inventory from Tiger
+  -> Gemini suggests recipes using expiry, quantity, and receipt line totals
+  -> Health displays the suggestions for review; nothing is saved or deducted
 ```
 
-PostgreSQL should remain the operational source of truth for current fridge
-inventory and recipe history. Snowflake is useful for aggregating usage trends.
-Fetch expiring inventory from PostgreSQL for freshness; optionally mirror
-inventory snapshots to Snowflake for historical or warehouse reporting. Do not
-make expiration visibility depend on a delayed warehouse sync.
+Tiger/PostgreSQL is the source of truth for current inventory and recipe
+history. Expiring-food filtering happens in SQL and omits rows with null
+expiration dates. The window includes expired items and dates through seven
+days from the database's current date. Snowflake is not required to run these
+features.
 
 ## Exact files to implement the complete integration
 
 | File | Responsibility |
 |---|---|
-| [server/migrations/001_initial_schema.sql](./server/migrations/001_initial_schema.sql) | Create inventory, recipe, ingredient, favorite, made-history, ingredient-usage, and nutrient-snapshot tables in Tiger. |
-| `server/scripts/migrate.js` | Apply the idempotent PostgreSQL migration with `npm run db:migrate`. |
-| `server/services/snowflake.js` | Own Snowflake connection setup, Cortex nutrient estimates, parameterized warehouse sync/aggregation, and error reporting. |
-| [server/snowflake/schema.sql](./server/snowflake/schema.sql) | Define the Snowflake nutrient-usage table that must be created in the configured database/schema. |
-| `server/index.js` | Provide recipe, favorite, made-history, and weekly-insights routes; retry unsynced nutrient snapshots. |
-| `client/src/api.js` | Provide `getWeeklyInsights()` for the weekly insights endpoint. |
-| `client/src/pages/Health.jsx` | Render estimated nutrition totals and expiring inventory with separate loading/error behavior and an expiry fallback. |
+| [server/migrations/001_initial_schema.sql](./server/migrations/001_initial_schema.sql) | Create inventory, recipe, ingredient, favorite, made-history, ingredient-usage, and future nutrient-snapshot tables in Tiger. |
+| [server/migrations/002_food_receipt_line_total.sql](./server/migrations/002_food_receipt_line_total.sql) | Add the nullable, nonnegative receipt line total to existing Tiger inventory tables. |
+| `server/scripts/migrate.js` | Apply both idempotent PostgreSQL migrations with `npm run db:migrate`. |
+| `server/services/snowflake.js` | Retained for a possible future Snowflake/Cortex integration; it is not used at runtime. |
+| [server/snowflake/schema.sql](./server/snowflake/schema.sql) | Retained for later; not required for the current app or migrations. |
+| `server/index.js` | Provide recipe, favorite, made-history, weekly-expiry, receipt-scan, and Gemini recommendation routes. |
+| `client/src/api.js` | Provide weekly-insights and on-demand Gemini recipe-recommendation requests. |
+| `client/src/pages/Health.jsx` | Render SQL-filtered expiring inventory and Gemini recipe ideas below it. |
+| `client/src/pages/ScanReceipt.jsx` | Let the user review and edit receipt line totals before saving inventory. |
 | `server/services/presage.js` | Manage transient SmartSpectra sessions, decode metrics, convert incoming JPEG frames to RGB, and enforce session/frame limits. |
 | `client/src/pages/Vitals.jsx` | Provide camera permission/start/stop controls, preview, validation feedback, live readings, confidence, and privacy/health notices. |
 | `client/src/App.jsx` | Add the Vitals navigation tab. |
@@ -65,11 +64,10 @@ make expiration visibility depend on a delayed warehouse sync.
 
 The server connects to Tiger (Tiger Data), which provides PostgreSQL-compatible
 database service. Use PostgreSQL SQL and the `pg` driver already present in the
-server. [server/migrations/001_initial_schema.sql](./server/migrations/001_initial_schema.sql)
-defines `food_items` plus the recipe and nutrient-history tables used by the
-design. Apply it to the configured Tiger database with `cd server && npm run db:migrate`.
-Keep Tiger credentials and deployment-specific connection settings in the
-server environment.
+server. Apply both migrations to the configured Tiger database with
+`cd server && npm run db:migrate`. This creates `food_items`, recipe/history
+tables, and the receipt-line-total column. Keep Tiger credentials and
+deployment-specific connection settings in the server environment.
 
 The recipe API uses one shared collection and adds no authentication. Marking a
 recipe made does not decrement inventory; no reliable matching/quantity
@@ -77,7 +75,7 @@ conversion is defined between recipe ingredients and inventory rows.
 
 ## Suggested API response contract
 
-For example, `GET /api/insights/weekly` could return:
+`GET /api/insights/weekly` returns the date window and matching inventory rows:
 
 ```json
 {
@@ -85,16 +83,6 @@ For example, `GET /api/insights/weekly` could return:
     "start": "2026-10-04",
     "end": "2026-10-11"
   },
-  "topNutritionCategories": [
-    {
-      "category": "protein",
-      "amountGrams": 428.5
-    },
-    {
-      "category": "carbohydrates",
-      "amountGrams": 361.2
-    }
-  ],
   "expiringFoods": [
     {
       "id": 17,
@@ -104,29 +92,36 @@ For example, `GET /api/insights/weekly` could return:
       "expiration_date": "2026-10-13",
       "expiration_is_estimated": true
     }
-  ],
-  "nutritionValuesAreEstimates": true
+  ]
 }
 ```
 
-Return empty arrays when there is no usage/inventory to report; return a clear
-server error if a required data source fails. Do not turn a Snowflake outage into
-a successful response with fabricated category values.
+The date window is computed by PostgreSQL as today and the prior seven days.
+`expiringFoods` can be empty. Rows without an expiration date are excluded.
 
 ## Implemented API behavior
 
 - GET /api/recipes lists the shared recipe collection with ingredients.
 - POST /api/recipes saves a recipe and its ingredients.
 - GET /api/recipes/favorites and POST /api/recipes/:id/favorite list and toggle shared favorites.
-- GET /api/recipes/history lists made events, ingredient quantities used, and immutable nutrient snapshots.
-- POST /api/recipes/:id/made uses Snowflake AI_COMPLETE to estimate total recipe protein, carbohydrates, fiber, and sugar in grams; validates the structured result; stores the estimate and source in PostgreSQL; and syncs it to Snowflake. Cortex values are estimates, not measured nutrition facts.
-- GET /api/insights/weekly returns nutrition totals for the prior seven days plus today and SQL-filtered inventory rows for expired foods or foods expiring through seven days from today. Null expiration dates are omitted.
+- GET /api/recipes/history lists made events, ingredient quantities used, and any existing nutrient snapshots. Current runtime does not create nutrient snapshots.
+- POST /api/recipes/:id/made records recipe history and ingredient usage in Tiger. It does not call Snowflake/Cortex, estimate nutrients, or decrement inventory.
+- GET /api/insights/weekly returns a computed date window and SQL-filtered inventory rows for expired foods or foods expiring through seven days from today. Null expiration dates are omitted.
+- POST /api/recommendations/recipes reads up to 100 in-stock inventory rows from Tiger and asks Gemini for up to three recipe suggestions. The API key is `GEMINI_API_KEY`; the endpoint returns validated inventory IDs and quantities with the generated suggestions. A missing key returns a configuration error.
+- POST /api/scan-receipt asks Gemini to identify receipt foods. The price field represents the receipt row's line total and is editable before saving.
 
-The Snowflake Node.js driver uses connection.execute() with bound query parameters. The configured role needs access to the selected Cortex model, warehouse, database, and schema, plus Snowflake's USE AI FUNCTIONS privilege and CORTEX_USER or AI_FUNCTIONS_USER database role. Configure the SNOWFLAKE_* values in the server environment and run server/snowflake/schema.sql in that database/schema before starting. Snowflake settings and permissions cannot be validated until supplied.
+Snowflake service code and schema are retained but no Snowflake settings or
+privileges are needed for the current runtime.
 
-The made endpoint records each recipe ingredient as a food-usage event, scaling its saved quantity by the requested servings. It does not decrement inventory because ingredient-to-inventory matching and unit conversion are not defined.
+The made endpoint records each recipe ingredient as a food-usage event, scaling
+its saved quantity by the requested servings. It does not decrement inventory
+because ingredient-to-inventory matching and unit conversion are not defined.
 
-If the warehouse is temporarily unavailable, a made event and nutrient snapshot remain in Tiger with a pending sync marker. The next weekly insights request retries the sync. The Health screen falls back to the inventory API so expiration visibility does not depend on Snowflake availability.
+When generating recipe ideas, Gemini is instructed to prioritize earlier
+expiration, larger available quantities, and higher receipt line totals. A
+line total describes the whole receipt row, so the UI does not treat it as a
+per-unit price or calculate recipe cost from it. Generated ideas are displayed
+for review and do not mutate saved recipes or inventory.
 
 ## Presage SmartSpectra Vitals integration
 
@@ -193,23 +188,20 @@ metrics are for general wellness and are not cleared for medical diagnosis or
 treatment. Relative arterial-pressure waveforms must not be presented as blood
 pressure readings.
 
-## Can Gemini do recipe recommendations based on RECEIPT and presage information?
+## Gemini recipe recommendations
 
-Yes, Gemini can technically receive inventory, recipe ingredients, and usage
-history and generate recipe suggestions or natural-language summaries. The
-repository already calls Gemini from `POST /api/scan-receipt` in
-[server/index.js](./server/index.js), using `@google/genai` and the server-side
-`GEMINI_API_KEY`.
+Gemini is used in two places: `POST /api/scan-receipt` interprets a receipt
+image, and the Health tab's **Generate recipe ideas** action requests
+`POST /api/recommendations/recipes`. The recommendation endpoint reads saved
+inventory from Tiger, including expiration date, quantity, and receipt line
+total, then asks Gemini to suggest recipes. This uses receipt information after
+it has been reviewed and saved; the recommendation endpoint does not resend the
+original receipt image. Presage measurements are unrelated and are not sent to
+Gemini.
 
-Gemini is an LLM, so its generated quantities, rankings, and explanations are
-not a reliable source of truth for measured nutrition totals. For exact top
-categories, calculate totals from recorded recipe/ingredient nutrient data
-with SQL (PostgreSQL or Snowflake), then optionally ask Gemini to explain those
-verified results or recommend recipes from them. Validate structured Gemini
-output server-side and keep user review before any generated recipe changes
-inventory.
-
-Gemini recipe recommendation generation is not implemented; Gemini remains
-used for receipt parsing. Cortex is used here only to estimate nutrient
-snapshots for recipes marked as made.
+The server checks that suggested inventory IDs exist and caps suggested
+quantities at saved amounts. Gemini's recipe text is still generated advice,
+not verified nutrition or allergy guidance. Suggestions are only displayed;
+they do not save a recipe or change inventory. Snowflake/Cortex is paused and
+not used by either Gemini feature.
 

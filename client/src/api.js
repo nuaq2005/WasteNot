@@ -12,6 +12,8 @@ async function request(path, options) {
 
 export const getFoods = () => request("/api/foods");
 export const getWeeklyInsights = () => request("/api/insights/weekly");
+export const getRecipeRecommendations = () =>
+  request("/api/recommendations/recipes", { method: "POST" });
 export const createVitalsSession = () =>
   request("/api/vitals/sessions", { method: "POST" });
 export const stopVitalsSession = (token) =>
