@@ -3,6 +3,7 @@ const sharp = require("sharp");
 const {
   SmartSpectraSDK,
   PixelFormat,
+  ProcessingStatus,
   ValidationCode,
   SmartSpectraErrorCode,
   breathingMetrics,
@@ -12,7 +13,8 @@ const {
 
 const MAX_ACTIVE_SESSIONS = 2;
 const MAX_SESSION_MS = 90_000;
-const FRAME_INTERVAL_MS = 60;
+// Allow 25 FPS input (40 ms per frame) with a little timing jitter.
+const FRAME_INTERVAL_MS = 35;
 const MAX_FRAME_BYTES = 512 * 1024;
 const FRAME_WIDTH = 640;
 const FRAME_HEIGHT = 480;
@@ -50,6 +52,9 @@ function publicError(code) {
   if (code === SmartSpectraErrorCode.kAuthenticationFailed) return "SmartSpectra rejected the configured API key.";
   if (code === SmartSpectraErrorCode.kCreditExhausted) return "The SmartSpectra account has no remaining measurement credits.";
   if (code === SmartSpectraErrorCode.kInputUnavailable) return "SmartSpectra could not initialize camera frame processing.";
+  if (code === SmartSpectraErrorCode.kNetworkError) return "The server could not reach SmartSpectra remote inference. Check server internet access and try again.";
+  if (code === SmartSpectraErrorCode.kServerError) return "SmartSpectra remote inference returned a server error. Try again later.";
+  if (code === SmartSpectraErrorCode.kTimestampGap) return "Camera frames arrived with a timing gap. Restart the measurement and keep the camera active.";
   return "SmartSpectra could not process this camera session.";
 }
 
@@ -102,10 +107,27 @@ async function createSession() {
     closed: false,
     frameBusy: false,
     lastFrameAt: 0,
+    frameRateWindowStartedAt: Date.now(),
+    framesInRateWindow: 0,
     lastTimestampUs: 0,
     startedAt: Date.now(),
     expiryTimer: null,
+    processingStatus: sdk.processingStatus,
+    readySent: false,
   };
+
+  function sendReadyWhenRunning() {
+    if (session.socket && !session.readySent && session.processingStatus === ProcessingStatus.kRunning) {
+      session.readySent = true;
+      send(session, { type: "ready" });
+    }
+  }
+
+  sdk.on("processingStatus", (status) => {
+    session.processingStatus = status;
+    send(session, { type: "processingStatus", status });
+    sendReadyWhenRunning();
+  });
 
   sdk.on("validationStatus", (code, _timestampUs, hint) => {
     send(session, {
@@ -121,7 +143,8 @@ async function createSession() {
       send(session, { type: "error", error: "SmartSpectra returned data the app could not read." });
     }
   });
-  sdk.on("error", (code) => {
+  sdk.on("error", (code, message, retryable) => {
+    console.error("SmartSpectra SDK error:", { code, message, retryable });
     send(session, { type: "error", error: publicError(code) });
     void destroySession(session);
   });
@@ -130,6 +153,8 @@ async function createSession() {
   try {
     sdk.useCustomInput();
     sdk.start();
+    session.processingStatus = sdk.processingStatus;
+    sendReadyWhenRunning();
   } catch (error) {
     await destroySession(session);
     if (error.code === SmartSpectraErrorCode.kAuthenticationFailed) {
@@ -152,7 +177,11 @@ function attachSocket(token, socket) {
     return;
   }
   session.socket = socket;
-  send(session, { type: "ready" });
+  send(session, { type: "processingStatus", status: session.processingStatus });
+  if (session.processingStatus === ProcessingStatus.kRunning) {
+    session.readySent = true;
+    send(session, { type: "ready" });
+  }
 
   socket.on("message", (data, isBinary) => {
     if (!isBinary || session.closed || session.frameBusy) return;
@@ -175,7 +204,7 @@ function attachSocket(token, socket) {
         if (session.closed) return;
         const timestampUs = Number(process.hrtime.bigint() / 1000n);
         session.lastTimestampUs = Math.max(timestampUs, session.lastTimestampUs + 1);
-        session.sdk.sendFrame(
+        const accepted = session.sdk.sendFrame(
           rgb,
           FRAME_WIDTH,
           FRAME_HEIGHT,
@@ -183,6 +212,18 @@ function attachSocket(token, socket) {
           PixelFormat.kRGB,
           session.lastTimestampUs
         );
+        if (!accepted) return;
+        session.framesInRateWindow += 1;
+        const now = Date.now();
+        const elapsed = now - session.frameRateWindowStartedAt;
+        if (elapsed >= 1000) {
+          send(session, {
+            type: "frameRate",
+            framesPerSecond: Math.round((session.framesInRateWindow * 1000) / elapsed),
+          });
+          session.framesInRateWindow = 0;
+          session.frameRateWindowStartedAt = now;
+        }
       })
       .catch(() => send(session, { type: "error", error: "Could not process a camera frame." }))
       .finally(() => { session.frameBusy = false; });
