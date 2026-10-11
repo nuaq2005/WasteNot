@@ -1,0 +1,32 @@
+/* src/App.css */
+.tabs {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  font-size: 16px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  color: var(--text-h);
+  background: var(--social-bg);
+  cursor: pointer;
+  transition: border-color 0.3s;
+}
+
+.tab:hover { border-color: var(--accent-border); }
+
+.tab.active {
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+}
+
+.page-container {
+  padding: 24px 20px;
+  flex-grow: 1;
+}
