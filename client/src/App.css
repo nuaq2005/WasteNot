@@ -1,32 +1,56 @@
-/* src/App.css */
 .tabs {
   display: flex;
   justify-content: center;
   gap: 8px;
   padding: 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid #BEE9E8;
 }
 
 .tab {
   font-size: 16px;
   padding: 8px 16px;
   border-radius: 6px;
-  border: 2px solid transparent;
-  color: var(--text-h);
-  background: var(--social-bg);
+  border: 2px solid #62B6CB;
+  color: #1B4965;
+  background: #CAE9FF;
   cursor: pointer;
-  transition: border-color 0.3s;
+  transition: background 0.2s, border-color 0.3s;
 }
 
-.tab:hover { border-color: var(--accent-border); }
+.tab:hover {
+  background: #5FA8D3;
+  color: #fff;
+  border-color: #5FA8D3;
+}
 
 .tab.active {
-  color: var(--accent);
-  background: var(--accent-bg);
-  border-color: var(--accent-border);
+  color: #fff;
+  background: #1B4965;
+  border-color: #1B4965;
 }
 
 .page-container {
   padding: 24px 20px;
   flex-grow: 1;
+}
+
+.app-header {
+  text-align: center;
+  margin: 24px 0 8px;
+}
+
+.app-title {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 48px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #1B4965;
+  margin: 0;
+}
+
+.app-subtitle {
+  font-size: 16px;
+  color: #62B6CB;
+  margin: 6px 0 0;
+  letter-spacing: 0.5px;
 }

@@ -308,8 +308,8 @@ Return JSON only, with this structure:
       ? parsed.recipes
       : [];
 
-    // 3. Return recipes in the format Health.jsx expects. They are saved only
-    // when the user explicitly favourites one.
+    // 3. Return recipes in the format Health.jsx expects. Favorites are saved
+    // only when the user explicitly clicks the heart.
     res.json({
       recipes,
       inventory
@@ -452,6 +452,7 @@ server.on("upgrade", (request, socket, head) => {
 // Export the server for use in other modules.
 module.exports = server;
 
+// Vercel imports the exported server; local `npm start` needs to bind a port.
 if (require.main === module) {
   const port = Number(process.env.PORT) || 3001;
   server.listen(port, () => {

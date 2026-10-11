@@ -51,7 +51,7 @@ export default function Favourites() {
       <header style={styles.header}>
         <p style={styles.eyebrow}>SAVED FROM GEMINI RECIPE IDEAS</p>
         <h2 style={styles.title}>Favourites</h2>
-        <p style={styles.description}>Recipes are saved as generated, along with the inventory details shown when you saved them.</p>
+        <p style={styles.description}>Recipes are saved as generated, along with the inventory details shown when saved.</p>
       </header>
 
       {loading && <p style={styles.status}>Loading favourites…</p>}
@@ -85,14 +85,13 @@ export default function Favourites() {
               {(recipe.usesInventory ?? []).map((used, index) => {
                 const food = inventoryById.get(Number(used.foodId));
                 if (!food) return <li key={`${used.foodId}-${index}`}>{used.quantity} {used.unit}</li>;
-                const days = daysUntil(food.expirationDate);
                 const price = food.receiptLineTotal == null
                   ? ""
                   : ` · receipt row $${Number(food.receiptLineTotal).toFixed(2)}`;
                 return (
                   <li key={`${used.foodId}-${index}`}>
                     {used.quantity} {used.unit} {food.name}
-                    {expirationLabel(days)}{price}
+                    {expirationLabel(daysUntil(food.expirationDate))}{price}
                   </li>
                 );
               })}

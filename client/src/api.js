@@ -15,11 +15,15 @@ export async function request(path, options = {}) {
     },
   });
 
+  const method = options.method || "GET";
   const contentType = response.headers.get("content-type") || "";
+  if (response.status === 404) {
+    throw new Error(`API route not found: ${method} ${path}. Restart the backend so it loads the current routes.`);
+  }
   if (!contentType.includes("application/json")) {
     const isHtml = contentType.includes("text/html");
     throw new Error(isHtml
-      ? `The API returned a web page instead of JSON (${response.status}). Make sure the backend is running on port 3001 and restart the client dev server.`
+      ? `The API returned a web page instead of JSON for ${method} ${path} (${response.status}). Check the backend route and Vite proxy.`
       : `The API returned an unexpected response (${response.status}).`);
   }
 
